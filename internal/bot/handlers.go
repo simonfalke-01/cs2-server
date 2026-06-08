@@ -137,6 +137,33 @@ func (b *Bot) handleStop(ctx context.Context, s *discordgo.Session, i *discordgo
 	b.followup(s, i, fmt.Sprintf("Server `%s` stopped and removed.", id))
 }
 
+func (b *Bot) handleKillAll(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
+	b.defer_(s, i)
+
+	// Scope the bulk stop to the caller's own servers when owner-scoped; an
+	// empty owner targets every server (admin/global bot).
+	owner := ""
+	if b.ownerScoped {
+		owner = userID(i)
+	}
+
+	res, err := b.api.StopAll(ctx, owner)
+	if err != nil {
+		b.followupErr(s, i, "kill all servers", err)
+		return
+	}
+	if res.Stopped == 0 && len(res.Failed) == 0 {
+		b.followup(s, i, "No servers to stop.")
+		return
+	}
+
+	msg := fmt.Sprintf("Stopped and removed %d server(s).", res.Stopped)
+	if len(res.Failed) > 0 {
+		msg += fmt.Sprintf("\n⚠️ Failed to stop %d: `%s`", len(res.Failed), strings.Join(res.Failed, "`, `"))
+	}
+	b.followup(s, i, msg)
+}
+
 // guardOwnership ensures a user can only mutate their own servers when the bot
 // is owner-scoped.
 func (b *Bot) guardOwnership(ctx context.Context, i *discordgo.InteractionCreate, id string) error {

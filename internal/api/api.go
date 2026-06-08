@@ -36,6 +36,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 	s.mux.HandleFunc("POST /v1/servers", s.handleCreate)
 	s.mux.HandleFunc("GET /v1/servers", s.handleList)
+	s.mux.HandleFunc("DELETE /v1/servers", s.handleStopAll)
 	s.mux.HandleFunc("GET /v1/servers/{id}", s.handleGet)
 	s.mux.HandleFunc("GET /v1/servers/{id}/status", s.handleStatus)
 	s.mux.HandleFunc("POST /v1/servers/{id}/restart", s.handleRestart)
@@ -168,6 +169,36 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+// handleStopAll stops and removes every server, or just those owned by the
+// optional owner_id query param. Each instance is stopped best-effort so a
+// single failure doesn't abort the rest; the response reports how many were
+// stopped and which ids failed.
+func (s *Server) handleStopAll(w http.ResponseWriter, r *http.Request) {
+	owner := r.URL.Query().Get("owner_id")
+	list, err := s.mgr.List(r.Context(), owner)
+	if err != nil {
+		s.writeManagerError(w, err)
+		return
+	}
+
+	stopped := 0
+	failed := []string{}
+	for _, in := range list {
+		if err := s.mgr.Stop(r.Context(), in.ID); err != nil {
+			s.log.Error("stop-all: stop failed", "id", in.ID, "err", err)
+			failed = append(failed, in.ID)
+			continue
+		}
+		stopped++
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "stopped",
+		"stopped": stopped,
+		"failed":  failed,
+	})
 }
 
 // --- helpers -------------------------------------------------------------

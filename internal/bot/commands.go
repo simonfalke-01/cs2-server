@@ -119,5 +119,9 @@ func commandDefs() []*discordgo.ApplicationCommand {
 				},
 			},
 		},
+		{
+			Name:        "killall",
+			Description: "Stop and remove all of your servers",
+		},
 	}
 }

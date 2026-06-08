@@ -127,6 +127,8 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleRestart(ctx, s, i)
 	case "stop":
 		b.handleStop(ctx, s, i)
+	case "killall":
+		b.handleKillAll(ctx, s, i)
 	default:
 		b.respond(s, i, "Unknown command.")
 	}

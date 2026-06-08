@@ -101,6 +101,25 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/v1/servers/"+url.PathEscape(id), nil, nil)
 }
 
+// StopAllResult reports the outcome of a bulk stop.
+type StopAllResult struct {
+	Stopped int      `json:"stopped"`
+	Failed  []string `json:"failed"`
+}
+
+// StopAll stops and removes all servers, or those owned by ownerID when set.
+func (c *Client) StopAll(ctx context.Context, ownerID string) (*StopAllResult, error) {
+	path := "/v1/servers"
+	if ownerID != "" {
+		path += "?owner_id=" + url.QueryEscape(ownerID)
+	}
+	var out StopAllResult
+	if err := c.do(ctx, http.MethodDelete, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var reqBody io.Reader
 	if body != nil {

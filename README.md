@@ -109,7 +109,7 @@ docker compose --profile bot up -d --build
 Then in Discord:
 
 - `/create map:de_dust2 mode:1v1 bots:4` → returns a `connect <ip>:<port>` string
-- `/list`, `/status id:<id>`, `/restart id:<id>`, `/stop id:<id>`
+- `/list`, `/status id:<id>`, `/restart id:<id>`, `/stop id:<id>`, `/killall`
 
 ## Game modes
 
@@ -235,6 +235,7 @@ Per-game-server settings (for the standalone smoke test) are in
 | GET    | `/healthz`                   | health check             |
 | POST   | `/v1/servers`                | create a server          |
 | GET    | `/v1/servers?owner_id=`      | list servers             |
+| DELETE | `/v1/servers?owner_id=`      | stop + remove all (bulk) |
 | GET    | `/v1/servers/{id}`           | get a server             |
 | GET    | `/v1/servers/{id}/status`    | live status via RCON     |
 | POST   | `/v1/servers/{id}/restart`   | restart                  |
