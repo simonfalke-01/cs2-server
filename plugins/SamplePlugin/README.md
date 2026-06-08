@@ -1,40 +1,36 @@
 # SamplePlugin
 
-A minimal [CounterStrikeSharp](https://docs.cssharp.dev/) plugin that proves
-custom C# game logic loads inside the dedicated server.
+A minimal [SwiftlyS2](https://swiftlys2.net/) plugin that proves custom C# game
+logic loads inside the dedicated server.
 
-It logs a banner on load, registers a `css_hello` command (`!hello` in chat),
-and hooks `EventRoundStart`.
+It logs a banner on load, registers a `sw_hello` command (`!hello` in chat), and
+hooks `EventRoundStart`.
+
+> We use SwiftlyS2 rather than CounterStrikeSharp because CSS is currently broken
+> on recent CS2 builds (see https://github.com/ianlucas/cs2-signatures), while
+> SwiftlyS2 loads and runs. SwiftlyS2 also doesn't require Metamod.
 
 ## Build
 
 ```bash
-dotnet build -c Release
+dotnet publish -c Release -o out
 ```
 
-Output: `bin/Release/net10.0/SamplePlugin.dll`.
+Output: a folder with `SamplePlugin.dll` + its deps.
 
 ## Deploy (local iteration)
 
-CounterStrikeSharp loads plugins from
-`game/csgo/addons/counterstrikesharp/plugins/<PluginName>/<PluginName>.dll`.
+SwiftlyS2 loads plugins from
+`game/csgo/addons/swiftlys2/plugins/<PluginName>/`.
 
-The docker image copies any folder you place under the mounted `/plugins`
-directory into that location on container start. So a layout like:
-
-```
-/plugins/
-  SamplePlugin/
-    SamplePlugin.dll
-```
-
-will be picked up automatically. The Makefile target `make plugins` builds this
-plugin and stages it under `./plugins-dist/` ready to mount.
+The docker image bundles this plugin automatically (built in a stage and copied
+to `/opt/cs2-plugins`, then synced on boot). You can also drop extra published
+plugin folders under the mounted `/plugins` directory and they'll be synced too.
 
 ## Versioning
 
-`CounterStrikeSharp.API` (NuGet) and the CSS runtime installed in the docker
-image must match. Both are pinned to `1.0.369` (.NET 10). When bumping, update:
+`SwiftlyS2.CS2` (NuGet) must match the SwiftlyS2 build installed in the docker
+image. Both are pinned to `1.3.5`. To bump:
 
 - `SamplePlugin.csproj` → `PackageReference Version`
-- `docker/cs2/Dockerfile` → `CSS_VERSION` / `CSS_FILE`
+- `docker/cs2/Dockerfile` → `SWIFTLY_VERSION` / `SWIFTLY_FILE`

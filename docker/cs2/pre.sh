@@ -3,9 +3,9 @@
 # working directory is ${STEAMAPPDIR}/game/.
 #
 # Modes:
-#   - Non-shared (default): install/refresh Metamod + CounterStrikeSharp into
-#     this instance's own game copy, patch gameinfo.gi, sync plugins.
-#   - Shared (CS2_SHARED_MODE=1): mods are already baked into the shared,
+#   - Non-shared (default): install/refresh SwiftlyS2 into this instance's own
+#     game copy, patch gameinfo.gi, sync plugins.
+#   - Shared (CS2_SHARED_MODE=1): the framework is already baked into the shared,
 #     read-only lower layer, so we only sync per-instance plugins.
 #
 # This script is `source`d, so avoid `exit`; use `return` on fatal errors.
@@ -28,17 +28,18 @@ else
 fi
 
 # --- Sync plugins (both modes) -------------------------------------------
-# Each plugin is a folder containing <Name>.dll. We sync, in order:
+# Each plugin is a folder (the `dotnet publish` output of a SwiftlyS2 plugin).
+# We sync, in order:
 #   1. plugins baked into the image at /opt/cs2-plugins (the bundled sample)
 #   2. extra user plugins optionally mounted at /plugins by the orchestrator
-CSS_PLUGINS_DIR="${CSGO_DIR}/addons/counterstrikesharp/plugins"
-mkdir -p "${CSS_PLUGINS_DIR}"
+SW_PLUGINS_DIR="${CSGO_DIR}/addons/swiftlys2/plugins"
+mkdir -p "${SW_PLUGINS_DIR}"
 if [[ -d /opt/cs2-plugins ]] && [[ -n "$(ls -A /opt/cs2-plugins 2>/dev/null)" ]]; then
-    cp -a /opt/cs2-plugins/. "${CSS_PLUGINS_DIR}/"
+    cp -a /opt/cs2-plugins/. "${SW_PLUGINS_DIR}/"
     echo "[mods] Bundled plugins synced from /opt/cs2-plugins."
 fi
 if [[ -d /plugins ]] && [[ -n "$(ls -A /plugins 2>/dev/null)" ]]; then
-    cp -a /plugins/. "${CSS_PLUGINS_DIR}/"
+    cp -a /plugins/. "${SW_PLUGINS_DIR}/"
     echo "[mods] User plugins synced from /plugins."
 fi
 
