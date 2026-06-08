@@ -18,6 +18,7 @@ type Bot struct {
 	session     *discordgo.Session
 	api         *apiclient.Client
 	log         *slog.Logger
+	appID       string // configured application ID; fallback when session state lags
 	guildID     string // empty => register commands globally
 	ownerScoped bool
 }
@@ -25,6 +26,7 @@ type Bot struct {
 // Config configures the bot.
 type Config struct {
 	Token   string
+	AppID   string // application ID; used as a fallback for command registration
 	GuildID string // optional; guild-scoped commands appear instantly
 	// OwnerScoped restricts list/stop/etc. to the invoking user's own servers.
 	OwnerScoped bool
@@ -43,6 +45,7 @@ func New(cfg Config, api *apiclient.Client, log *slog.Logger) (*Bot, error) {
 		session:     session,
 		api:         api,
 		log:         log,
+		appID:       cfg.AppID,
 		guildID:     cfg.GuildID,
 		ownerScoped: cfg.OwnerScoped,
 	}
@@ -58,8 +61,21 @@ func (b *Bot) Run(ctx context.Context) error {
 	}
 	defer b.session.Close()
 
-	appID := b.session.State.User.ID
-	b.log.Info("bot connected", "user", b.session.State.User.Username, "app_id", appID)
+	// Resolve the application ID for command registration. session.State.User
+	// is populated from the gateway READY event, which can briefly lag after
+	// Open() returns — dereferencing it directly races and panics. Prefer the
+	// session identity when available, otherwise fall back to the configured
+	// application ID.
+	appID := b.appID
+	username := "unknown"
+	if u := b.session.State.User; u != nil {
+		appID = u.ID
+		username = u.Username
+	}
+	if appID == "" {
+		return fmt.Errorf("bot: application id unavailable (session state not ready and DISCORD_APP_ID unset)")
+	}
+	b.log.Info("bot connected", "user", username, "app_id", appID)
 
 	registered, err := b.registerCommands(appID)
 	if err != nil {
@@ -69,34 +85,25 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	<-ctx.Done()
 
-	// Best-effort cleanup of guild commands so stale schemas don't linger.
-	b.cleanupCommands(appID, registered)
+	// Intentionally do NOT delete commands on shutdown. Deleting + re-creating
+	// on every restart leaves a window with zero commands and makes them flicker
+	// out of the client; the bulk overwrite on startup already reconciles the
+	// set idempotently, so persisting them across restarts is both correct and
+	// gap-free.
 	return nil
 }
 
+// registerCommands installs the slash-command set with a single atomic bulk
+// overwrite. ApplicationCommandBulkOverwrite replaces the guild's command set
+// in one call (idempotent, no per-command create/delete churn), so restarts
+// never leave the guild with a partial or empty command list.
 func (b *Bot) registerCommands(appID string) ([]*discordgo.ApplicationCommand, error) {
 	defs := commandDefs()
-	out := make([]*discordgo.ApplicationCommand, 0, len(defs))
-	for _, d := range defs {
-		c, err := b.session.ApplicationCommandCreate(appID, b.guildID, d)
-		if err != nil {
-			return nil, fmt.Errorf("bot: register %q: %w", d.Name, err)
-		}
-		out = append(out, c)
+	out, err := b.session.ApplicationCommandBulkOverwrite(appID, b.guildID, defs)
+	if err != nil {
+		return nil, fmt.Errorf("bot: bulk overwrite commands: %w", err)
 	}
 	return out, nil
-}
-
-func (b *Bot) cleanupCommands(appID string, cmds []*discordgo.ApplicationCommand) {
-	// Only clean up guild-scoped commands; global ones are expensive to churn.
-	if b.guildID == "" {
-		return
-	}
-	for _, c := range cmds {
-		if err := b.session.ApplicationCommandDelete(appID, b.guildID, c.ID); err != nil {
-			b.log.Warn("failed to delete command", "name", c.Name, "err", err)
-		}
-	}
 }
 
 // onInteraction dispatches slash commands.

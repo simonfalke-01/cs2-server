@@ -39,6 +39,7 @@ func run(log *slog.Logger) error {
 
 	b, err := bot.New(bot.Config{
 		Token:       cfg.DiscordToken,
+		AppID:       cfg.DiscordAppID,
 		GuildID:     cfg.DiscordGuildID,
 		OwnerScoped: true,
 	}, client, log)
