@@ -55,6 +55,26 @@ func TestApplyDefaults_ExplicitValuesOverridePreset(t *testing.T) {
 	}
 }
 
+func TestApplyDefaults_1v1ForcesNoBots(t *testing.T) {
+	m := newDefaultsManager()
+	opts := CreateOptions{Mode: "1v1", BotQuota: 8}
+	m.applyDefaults(&opts)
+
+	if opts.BotQuota != 0 {
+		t.Fatalf("bot_quota = %d, want 0 (1v1 is human-only)", opts.BotQuota)
+	}
+}
+
+func TestApplyDefaults_BotsAllowedInOtherModes(t *testing.T) {
+	m := newDefaultsManager()
+	opts := CreateOptions{Mode: "deathmatch", BotQuota: 8}
+	m.applyDefaults(&opts)
+
+	if opts.BotQuota != 8 {
+		t.Fatalf("bot_quota = %d, want 8 (non-1v1 keeps requested bots)", opts.BotQuota)
+	}
+}
+
 func TestApplyDefaults_UnknownModeFallsBackToDefaults(t *testing.T) {
 	m := newDefaultsManager()
 	opts := CreateOptions{Mode: "surf"}

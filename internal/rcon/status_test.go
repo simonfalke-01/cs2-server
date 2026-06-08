@@ -15,6 +15,9 @@ players : 3 humans, 2 bots (10/0 max) (not hibernating)
 	if got.PlayerCount != 5 {
 		t.Errorf("players: got %d want 5", got.PlayerCount)
 	}
+	if got.HumanCount != 3 {
+		t.Errorf("humans: got %d want 3", got.HumanCount)
+	}
 	if got.MaxPlayers != 10 {
 		t.Errorf("max: got %d want 10", got.MaxPlayers)
 	}
@@ -29,6 +32,9 @@ players : 0 humans, 4 bots (12 max)`
 	}
 	if got.PlayerCount != 4 {
 		t.Errorf("players: got %d want 4", got.PlayerCount)
+	}
+	if got.HumanCount != 0 {
+		t.Errorf("humans: got %d want 0", got.HumanCount)
 	}
 	if got.MaxPlayers != 12 {
 		t.Errorf("max: got %d want 12", got.MaxPlayers)

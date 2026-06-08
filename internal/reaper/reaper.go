@@ -72,7 +72,9 @@ func (r *Reaper) tick(ctx context.Context) {
 			continue
 		}
 
-		if st.PlayerCount > 0 {
+		// Count only real players: a server occupied solely by bots is still
+		// idle and should be reaped (bots never trigger a "join" to reset it).
+		if st.HumanCount > 0 {
 			r.clear(in.ID)
 			continue
 		}

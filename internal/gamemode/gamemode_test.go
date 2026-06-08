@@ -13,6 +13,9 @@ func TestLookupKnown(t *testing.T) {
 	if p.Name != "1v1" || p.Cfg != "1v1.cfg" || p.MaxPlayers != 12 {
 		t.Fatalf("unexpected 1v1 preset: %+v", p)
 	}
+	if !p.NoBots {
+		t.Fatal("1v1 preset should be human-only (NoBots)")
+	}
 }
 
 func TestLookupCaseInsensitiveAndTrim(t *testing.T) {

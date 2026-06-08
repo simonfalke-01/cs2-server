@@ -527,6 +527,7 @@ func (m *DockerManager) Status(ctx context.Context, id string) (*LiveStatus, err
 		ls.Map = parsed.Map
 	}
 	ls.PlayerCount = parsed.PlayerCount
+	ls.HumanCount = parsed.HumanCount
 	if parsed.MaxPlayers > 0 {
 		ls.MaxPlayers = parsed.MaxPlayers
 	}
@@ -570,6 +571,11 @@ func (m *DockerManager) applyDefaults(opts *CreateOptions) {
 		}
 		if opts.MaxPlayers <= 0 {
 			opts.MaxPlayers = preset.MaxPlayers
+		}
+		if preset.NoBots {
+			// Human-only mode: ignore any requested bot quota. Bots would also
+			// keep the server perpetually "occupied" and defeat idle reaping.
+			opts.BotQuota = 0
 		}
 	}
 

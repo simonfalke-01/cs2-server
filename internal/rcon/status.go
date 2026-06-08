@@ -8,9 +8,13 @@ import (
 
 // StatusInfo is a parsed subset of the CS2 "status" command output.
 type StatusInfo struct {
-	Map         string
+	Map string
+	// PlayerCount is the total occupancy (humans + bots).
 	PlayerCount int
-	MaxPlayers  int
+	// HumanCount is real connected players only (excludes bots). Idle detection
+	// keys on this so a server full of bots is still considered empty.
+	HumanCount int
+	MaxPlayers int
 }
 
 var (
@@ -33,6 +37,7 @@ func ParseStatus(raw string) StatusInfo {
 			humans, _ := strconv.Atoi(m[1])
 			bots, _ := strconv.Atoi(m[2])
 			maxp, _ := strconv.Atoi(m[3])
+			info.HumanCount = humans
 			info.PlayerCount = humans + bots
 			info.MaxPlayers = maxp
 		}

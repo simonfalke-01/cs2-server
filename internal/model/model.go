@@ -85,6 +85,7 @@ type LiveStatus struct {
 	Online      bool   `json:"online"`
 	Map         string `json:"map"`
 	PlayerCount int    `json:"player_count"`
+	HumanCount  int    `json:"human_count"`
 	MaxPlayers  int    `json:"max_players"`
 	Raw         string `json:"raw,omitempty"`
 }

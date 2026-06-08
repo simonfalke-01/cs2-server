@@ -25,6 +25,10 @@ type Preset struct {
 	// Cfg is the cfg filename the game container execs for this mode (e.g.
 	// "1v1.cfg"). Empty means no mode-specific cfg.
 	Cfg string
+	// NoBots forces the server to run without bots regardless of a requested
+	// bot quota (e.g. the 1v1 arena is human-only; bots would also defeat idle
+	// reaping by keeping the server perpetually "occupied").
+	NoBots bool
 	// Description is a short human-friendly summary (for Discord choices/docs).
 	Description string
 }
@@ -61,6 +65,7 @@ var registry = map[string]Preset{
 		GameMode:    1,
 		MaxPlayers:  12,
 		Cfg:         "1v1.cfg",
+		NoBots:      true,
 		Description: "Winner-stays 1v1 arena",
 	},
 }
