@@ -2,8 +2,13 @@
 
 Status of the cs2-server platform against the original goal: a **Go control
 plane** (Discord bot + orchestrator) that spins up **on-demand CS2 servers**
-running **Metamod:Source + CounterStrikeSharp** for **custom C# gameplay**,
-public/private configurable, Docker-first with a path to **Kubernetes + Agones**.
+running the **SwiftlyS2** framework for **custom C# gameplay**, public/private
+configurable, Docker-first with a path to **Kubernetes + Agones**.
+
+> Plugin layer note: we use **SwiftlyS2** instead of CounterStrikeSharp because
+> CSS is currently broken on recent CS2 builds (see
+> [ianlucas/cs2-signatures](https://github.com/ianlucas/cs2-signatures)).
+> SwiftlyS2 loads via gameinfo.gi (no Metamod) and works on the current build.
 
 This document tracks what's done and what's upcoming/unimplemented.
 
@@ -17,10 +22,10 @@ This document tracks what's done and what's upcoming/unimplemented.
 
 ## Implemented (MVP)
 
-- [x] Modded CS2 docker image: Metamod + CounterStrikeSharp install, idempotent
-  `gameinfo.gi` patch, plugin sync from `/plugins` (`docker/cs2/`)
-- [x] Sample CounterStrikeSharp C# plugin proving custom logic loads
-  (`plugins/SamplePlugin`)
+- [x] Modded CS2 docker image: SwiftlyS2 install, idempotent `gameinfo.gi`
+  patch, bundled + mounted plugin sync (`docker/cs2/`)
+- [x] Sample SwiftlyS2 C# plugin proving custom logic loads, verified end-to-end
+  on the current CS2 build (`plugins/SamplePlugin`)
 - [x] `ServerManager` interface + Docker backend (`internal/orchestrator`)
 - [x] SQLite instance store, UDP/TCP port allocator
   (`internal/store`, `internal/ports`)
@@ -88,8 +93,7 @@ High-value gaps in what already exists.
   surf) as a single `/create mode:` choice mapping to `game_type`/`game_mode`/
   cfg bundles.
 - [ ] **Plugin management.** Per-server plugin selection, upload/registry of
-  CounterStrikeSharp plugins, and hot-reload, instead of one shared
-  `CS2C_PLUGINS_DIR`.
+  SwiftlyS2 plugins, and hot-reload, instead of the single bundled set.
 - [ ] **Live config tuning** over RCON (change map, kick, exec cfg) from Discord.
 - [ ] **`SteamAPIKey` usage.** Loaded in config but unused — wire up for
   player/stat lookups or workshop API.
@@ -118,22 +122,19 @@ The `ServerManager` interface is the seam (see
 
 - [ ] **Published images** (GHCR) for game + control plane, versioned releases.
 - [ ] **Architecture & operator docs** (runbook, scaling, security hardening).
-- [ ] **End-to-end integration test** that boots the image, asserts `meta list`
-  shows CounterStrikeSharp and `SamplePlugin` loads (currently a manual smoke
-  test in the README).
+- [ ] **End-to-end integration test** that boots the image and asserts SwiftlyS2
+  + `SamplePlugin` load (currently a manual smoke test in the README).
 
 ---
 
 ## Known limitations / tech debt
 
-- Host-path bind mounts: the orchestrator passes **host** paths to the Docker
-  API, so running it in a container requires identical host/container paths (see
-  `deploy/controlplane.compose.yml`). Documented but sharp-edged.
 - No authentication on the orchestrator API (Phase A).
 - Disk: in the default (non-shared) mode each server stores its own ~40–60GB
   game copy. Enable `CS2C_SHARED_GAME_FILES=true` to share one copy (needs a
-  Linux host with OverlayFS; grants game containers `CAP_SYS_ADMIN`).
+  Linux host with OverlayFS or fuse-overlayfs).
 - `Status` returns `online` even when RCON isn't ready yet (best-effort).
-- Plugins are global to all servers via one mounted dir (Phase C).
-- Version coupling: `CounterStrikeSharp.API` NuGet and the CSS runtime in the
-  image must match (both pinned `1.0.369` / .NET 10); bumps are manual.
+- Plugins are the same bundled set for all servers (Phase C).
+- Framework/build coupling: a CS2 update can break the plugin framework's
+  signatures until upstream updates (see the signatures tracker). `SwiftlyS2.CS2`
+  NuGet and the framework baked into the image must match (both pinned `1.3.5`).

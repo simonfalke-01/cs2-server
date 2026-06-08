@@ -2,11 +2,18 @@
 
 On-demand **Counter-Strike 2** dedicated-server platform: a **Go** control plane
 (Discord bot + orchestrator) spins up CS2 servers as Docker containers, each
-running **Metamod:Source + CounterStrikeSharp** so you can load **custom C#
-gameplay plugins**. Public/private is configurable per server via a Steam GSLT.
+running the **SwiftlyS2** framework so you can load **custom C# gameplay
+plugins**. Public/private is configurable per server via a Steam GSLT.
 
 Built Docker-first with a clean seam to migrate to **Kubernetes + Agones** later
 (see `internal/orchestrator/agones_stub.go`).
+
+> **Why SwiftlyS2 (not CounterStrikeSharp)?** CounterStrikeSharp is currently
+> broken on recent CS2 builds — see the signature tracker at
+> [ianlucas/cs2-signatures](https://github.com/ianlucas/cs2-signatures) (CSS is
+> degraded/red, SwiftlyS2 is green). SwiftlyS2 is a Source2 C# scripting
+> framework that loads directly via `gameinfo.gi` (it does **not** need Metamod),
+> which also sidesteps Metamod's plugin-folder resolution issues on CS2.
 
 ## Architecture
 
@@ -18,23 +25,21 @@ flowchart TD
   Orch -->|RCON| GS
   Orch --> DB[(SQLite state)]
   Eng --> GS[CS2 Container]
-  GS --> MM[Metamod:Source]
-  MM --> CSS[CounterStrikeSharp .NET10]
-  CSS --> Plug[Your C# Plugins]
+  GS --> SW[SwiftlyS2 .NET]
+  SW --> Plug[Your C# Plugins]
 ```
 
 - **Go control plane** — `cmd/orchestrator` (Docker lifecycle + RCON + HTTP API)
   and `cmd/bot` (Discord slash commands). Gameplay logic cannot be Go: CS2 loads
-  native Metamod plugins, and the practical scripting layer is CounterStrikeSharp
-  (C#/.NET).
-- **Game image** — `docker/cs2` extends `joedwards32/cs2`, installing Metamod +
-  CounterStrikeSharp and your compiled plugins on boot.
+  native Source2 plugins, and the practical scripting layer is SwiftlyS2 (C#/.NET).
+- **Game image** — `docker/cs2` extends `joedwards32/cs2`, installing SwiftlyS2
+  and your compiled plugins on boot.
 
 ## Repository layout
 
 ```
-docker/cs2/            Modded CS2 image (Metamod + CounterStrikeSharp)
-plugins/SamplePlugin/  Sample CounterStrikeSharp C# plugin
+docker/cs2/            Modded CS2 image (SwiftlyS2)
+plugins/SamplePlugin/  Sample SwiftlyS2 C# plugin
 cmd/orchestrator/      Orchestrator API service
 cmd/bot/               Discord bot
 internal/model/        Shared domain types (leaf package)
@@ -52,51 +57,51 @@ deploy/                Compose files, env examples, control-plane Dockerfiles
 
 ## Prerequisites
 
-- Docker (engine + CLI)
-- Go 1.26+
-- .NET 10 SDK (to build plugins)
+- Docker (engine + CLI) — that's it for deployment; Go and .NET are only used
+  inside the compose build
 - A Linux host with **60GB+ free disk** for the CS2 game files
 - For public servers: a Steam **GSLT** (https://steamcommunity.com/dev/managegameservers)
+- For local development on the Go/C# code: Go 1.26+ and the .NET 10 SDK
 
 ## Quick start
 
-### 1. Build the modded game image
+The entire stack runs in Docker Compose — `docker compose up -d --build` builds
+the game image (with SwiftlyS2 + the bundled sample plugin), the orchestrator,
+and (optionally) the Discord bot. No host-side builds, no host paths.
 
 ```bash
-make image          # docker build -t cs2-server/cs2:latest docker/cs2
+cp .env.example .env      # set CS2C_PUBLIC_IP, ports, optional Discord creds
+docker compose up -d --build
 ```
 
-### 2. Build the sample plugin
+This starts the **orchestrator** (API on `:${CS2C_API_PORT:-18080}`). Create a
+server via the API:
 
 ```bash
-make plugins        # stages plugins-dist/SamplePlugin/SamplePlugin.dll
+curl -s -X POST http://127.0.0.1:18080/v1/servers \
+  -H 'Content-Type: application/json' \
+  -d '{"owner_id":"me","name":"test","map":"de_dust2","bot_quota":2}'
 ```
 
-### 3. Smoke-test one server (no control plane)
+The first create downloads the game once (~40-60GB). With shared game files
+enabled (default), later servers start in seconds. Connect in-game with the
+returned `connect <ip>:<port>` string. The server console will show:
 
-```bash
-cp deploy/cs2.env.example deploy/cs2.env   # edit RCON pw, GSLT, etc.
-docker compose -f deploy/cs2-server.compose.yml --env-file deploy/cs2.env up
+```
+SwiftlyS2 | Loading plugin: (swRoot)/plugins/SamplePlugin/SamplePlugin.dll
+[SamplePlugin] Loaded successfully.
+SwiftlyS2 | Loaded Plugin SamplePlugin 0.1.0
 ```
 
-First boot downloads ~60GB via SteamCMD. Watch the console for:
+In game, `!hello` in chat (or `sw_hello` in the server console) replies —
+proving custom C# logic runs.
 
-- `meta list` showing **CounterStrikeSharp** loaded, and
-- `SamplePlugin loaded successfully.`
+### Discord bot (optional)
 
-In game, `!hello` in chat (or `css_hello` in the server console) replies, and
-each round start prints a banner — proving custom C# logic runs.
-
-### 4. Run the control plane
+Fill `DISCORD_TOKEN` + `DISCORD_APP_ID` in `.env`, then enable the `bot` profile:
 
 ```bash
-cp deploy/controlplane.env.example deploy/controlplane.env   # fill DISCORD_* etc.
-
-# Easiest for local dev: run the orchestrator on the host so its bind-mount
-# paths match the host Docker engine.
-set -a; source deploy/controlplane.env; set +a
-make run-orchestrator     # listens on :8080
-make run-bot              # in another shell
+docker compose --profile bot up -d --build
 ```
 
 Then in Discord:
@@ -104,95 +109,82 @@ Then in Discord:
 - `/create map:de_dust2 bots:4` → returns a `connect <ip>:<port>` string
 - `/list`, `/status id:<id>`, `/restart id:<id>`, `/stop id:<id>`
 
-## Deploying on a Linux VPS (recommended)
+## Deploying on a Linux VPS
 
-Run **everything on the VPS** — game servers, orchestrator, and bot. The
-orchestrator must share the host's Docker engine and filesystem (it passes host
-paths to the Docker API and reaches RCON over `127.0.0.1`).
-
-You only need **Docker** on the VPS; the Go binaries and the C# plugin are built
-inside throwaway containers (no Go/.NET install required).
+Everything runs in Docker Compose — you only need **Docker** on the VPS. The Go
+binaries, the C# plugin, and the game image are all built inside the compose
+build (no Go/.NET install on the host).
 
 ```bash
 # 1. Docker
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker "$USER" && newgrp docker
 
-# 2. Clone
+# 2. Clone + configure
 git clone git@github.com:simonfalke-01/cs2-server.git && cd cs2-server
+cp .env.example .env
+#   set CS2C_PUBLIC_IP=<vps ip>; optionally DISCORD_TOKEN / DISCORD_APP_ID.
+#   On rootless Docker, set DOCKER_SOCK=/run/user/$(id -u)/docker.sock
 
-# 3. Build the modded game image
-make image
-
-# 4. Build the sample plugin (no .NET install)
-docker run --rm -v "$PWD":/w -w /w/plugins/SamplePlugin mcr.microsoft.com/dotnet/sdk:10.0 \
-  bash -c 'dotnet build -c Release && mkdir -p /w/plugins-dist/SamplePlugin \
-           && cp bin/Release/net10.0/SamplePlugin.dll /w/plugins-dist/SamplePlugin/'
-
-# 5. Build the Go binaries (no Go install)
-docker run --rm -v "$PWD":/w -w /w -e CGO_ENABLED=0 golang:1.26 \
-  bash -c 'go build -o bin/orchestrator ./cmd/orchestrator && go build -o bin/bot ./cmd/bot'
-
-# 6. Configure
-cp deploy/controlplane.env.example deploy/controlplane.env
-#   set CS2C_PUBLIC_IP=<vps ip>, CS2C_PLUGINS_DIR / CS2C_DATA_ROOT to absolute
-#   paths, DISCORD_TOKEN, DISCORD_APP_ID, CS2C_ORCHESTRATOR_URL=http://127.0.0.1:8080
-#   and (recommended) CS2C_SHARED_GAME_FILES=true  (see below)
-
-# 7. Run
-set -a; source deploy/controlplane.env; set +a
-./bin/orchestrator &     # or a systemd unit
-./bin/bot &
+# 3. Build + run (orchestrator only; add --profile bot for the Discord bot)
+docker compose up -d --build
 ```
 
 **Firewall:** allow inbound **TCP 22** and **UDP 27015–27115** (your port pool).
-Keep the orchestrator API (**TCP 8080**) and RCON ports **closed to the
-Internet** — the API currently has no auth and RCON is reached via localhost.
+Keep the orchestrator API (the published `CS2C_API_PORT`, default `18080`) and
+RCON ports **closed to the Internet** — the API currently has no auth.
+
+**Rootless Docker** is supported: the orchestrator's socket path is configurable
+via `DOCKER_SOCK`, game containers reach the shared `cs2net` network by name, and
+shared-files mode falls back to `fuse-overlayfs` when the kernel rejects an
+unprivileged OverlayFS mount.
 
 ### Shared game files (OverlayFS) — save disk, start servers in seconds
 
-By default each server stores its **own ~40–60GB game copy**, so on an 80GB disk
-you can only run one. Enable shared mode to keep **one** read-only game copy that
-all servers overlay with a tiny (~MB) writable layer:
+By default each server stores its **own ~40–60GB game copy**. Enable shared mode
+(the default in `.env.example`) to keep **one** read-only game copy that all
+servers overlay with a tiny (~MB) writable layer:
 
 ```
 CS2C_SHARED_GAME_FILES=true
-CS2C_SHARED_GAME_DIR=/absolute/path/to/data/shared
 ```
 
-- The first `/create` runs a one-off **seeder** container that downloads the
-  game once and bakes in Metamod + CounterStrikeSharp (slow, ~40GB). Subsequent
-  servers start in **seconds** and cost only a few MB each.
-- Requires a real Linux host with OverlayFS (**not** Docker Desktop on macOS).
-  Game containers get `CAP_SYS_ADMIN` + `apparmor=unconfined` to mount the
-  overlay; the entrypoint mounts as root then drops to the unprivileged `steam`
-  user to run the server.
+- The first create runs a one-off **seeder** container that downloads the game
+  once and bakes in SwiftlyS2 (slow, ~40GB). Subsequent servers start in
+  **seconds** and cost only a few MB each.
+- Requires a Linux host with OverlayFS or fuse-overlayfs (**not** Docker Desktop
+  on macOS). Game containers get `CAP_SYS_ADMIN` + `/dev/fuse`; the entrypoint
+  mounts the overlay as root then drops to the unprivileged `steam` user.
 - Stopping a server removes its per-instance layer, reclaiming the space.
 
 ## How plugin loading works
 
-CounterStrikeSharp loads plugins from
-`game/csgo/addons/counterstrikesharp/plugins/<Name>/<Name>.dll`.
+SwiftlyS2 loads plugins from `game/csgo/addons/swiftlys2/plugins/<Name>/`.
 
-The orchestrator bind-mounts `CS2C_PLUGINS_DIR` (host) into each container at
-`/plugins` (read-only). On boot, `docker/cs2/pre.sh`:
+The game image **bundles** the sample plugin: it's built in a `dotnet publish`
+stage and copied to `/opt/cs2-plugins`. On boot, `docker/cs2/pre.sh`:
 
-1. installs/refreshes Metamod + CounterStrikeSharp into `csgo/addons`,
-2. idempotently patches `csgo/gameinfo.gi` to load Metamod,
-3. copies every folder under `/plugins` into the CounterStrikeSharp plugins dir.
+1. (non-shared mode) installs/refreshes SwiftlyS2 into `csgo/addons` and patches
+   `csgo/gameinfo.gi` with the `Game csgo/addons/swiftlys2` search path;
+2. syncs the bundled plugins from `/opt/cs2-plugins` into the SwiftlyS2 plugins
+   dir, plus any extra plugins mounted at `/plugins`.
 
-So staging `plugins-dist/SamplePlugin/SamplePlugin.dll` and pointing
-`CS2C_PLUGINS_DIR=./plugins-dist` is all that's needed to ship a plugin.
+In shared mode, SwiftlyS2 + gameinfo are baked into the seeded read-only copy, so
+boot only syncs the per-instance plugins.
 
 ### Writing your own plugin
 
 Copy `plugins/SamplePlugin`, rename the project/class, and implement against the
-[CounterStrikeSharp API](https://docs.cssharp.dev/). Keep the
-`CounterStrikeSharp.API` NuGet version in sync with the CSS runtime baked into
-the image (both pinned to `1.0.369`, .NET 10). To bump:
+[SwiftlyS2 API](https://swiftlys2.net/docs/). A plugin is a `BasePlugin`
+subclass with a `[PluginMetadata]` attribute; build it with `dotnet publish`.
+Keep the `SwiftlyS2.CS2` NuGet version in sync with the framework baked into the
+image (both pinned to `1.3.5`). To bump:
 
 - `plugins/*/.csproj` → `PackageReference Version`
-- `docker/cs2/Dockerfile` → `CSS_VERSION` / `CSS_FILE`
+- `docker/cs2/Dockerfile` → `SWIFTLY_VERSION` / `SWIFTLY_FILE`
+
+Add more plugins by dropping new projects under `plugins/` — each is published
+and bundled automatically by the image build.
 
 ## Configuration
 
@@ -240,5 +232,5 @@ implementation to scale across a cluster without touching the API or bot — see
 ## Credits
 
 - [joedwards32/CS2](https://github.com/joedwards32/CS2) — base CS2 docker image
-- [Metamod:Source](https://www.sourcemm.net/)
-- [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp)
+- [SwiftlyS2](https://github.com/swiftly-solution/swiftlys2) — Source2 C# framework
+- [ianlucas/cs2-signatures](https://github.com/ianlucas/cs2-signatures) — framework compatibility tracker

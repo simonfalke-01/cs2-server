@@ -45,16 +45,25 @@ run-orchestrator: orchestrator ## Run the orchestrator (reads env)
 run-bot: bot ## Run the Discord bot (reads env)
 	./bin/bot
 
-## --- Game image + plugins -------------------------------------------------
+## --- Docker compose (whole stack) -----------------------------------------
 
-image: ## Build the modded CS2 docker image
-	docker build -t $(CS2_IMAGE) docker/cs2
+up: ## Build and start the stack (docker compose up -d --build)
+	docker compose up -d --build
 
-plugins: ## Build the sample C# plugin into ./plugins-dist/<name>/
-	dotnet build -c Release $(PLUGIN_DIR)/$(PLUGIN_NAME).csproj
-	@mkdir -p plugins-dist/$(PLUGIN_NAME)
-	@cp $(PLUGIN_DIR)/bin/Release/net10.0/$(PLUGIN_NAME).dll plugins-dist/$(PLUGIN_NAME)/
-	@echo "Staged plugin at plugins-dist/$(PLUGIN_NAME)/$(PLUGIN_NAME).dll"
+up-bot: ## Build and start the stack including the Discord bot profile
+	docker compose --profile bot up -d --build
+
+down: ## Stop the stack
+	docker compose down
+
+image: ## Build just the game image (with SwiftlyS2 + bundled plugins)
+	docker compose build game-image
+
+## --- Plugins (local build, optional) --------------------------------------
+
+plugins: ## Publish the sample SwiftlyS2 plugin locally into ./plugins-dist/<name>/
+	dotnet publish -c Release $(PLUGIN_DIR)/$(PLUGIN_NAME).csproj -o plugins-dist/$(PLUGIN_NAME)
+	@echo "Published plugin to plugins-dist/$(PLUGIN_NAME)/"
 
 ## --- Housekeeping ---------------------------------------------------------
 
