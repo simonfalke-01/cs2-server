@@ -51,6 +51,7 @@ func run(log *slog.Logger) error {
 		GamePortMax:       cfg.GamePortMax,
 		DefaultGSLT:       cfg.DefaultGSLT,
 		DefaultMap:        cfg.DefaultMap,
+		DefaultMode:       cfg.DefaultMode,
 		DefaultMaxPlayers: cfg.DefaultMaxPlayers,
 		SharedGameFiles:   cfg.SharedGameFiles,
 		SharedVolume:      cfg.SharedVolume,

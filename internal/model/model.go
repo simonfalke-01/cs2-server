@@ -36,6 +36,10 @@ type CreateOptions struct {
 	Name string
 	// Map is the start map, e.g. "de_inferno".
 	Map string
+	// Mode is a game-mode preset name (e.g. "competitive", "1v1"). When set it
+	// seeds GameType/GameMode/MaxPlayers and the in-game cfg bundle. Explicitly
+	// provided GameType/GameMode/MaxPlayers still take precedence.
+	Mode string
 	// GameType / GameMode follow Valve's dedicated server matrix.
 	GameType int
 	GameMode int
@@ -60,6 +64,7 @@ type Instance struct {
 	OwnerID    string    `json:"owner_id"`
 	Name       string    `json:"name"`
 	Map        string    `json:"map"`
+	Mode       string    `json:"mode"`
 	Status     Status    `json:"status"`
 	Public     bool      `json:"public"`
 	Host       string    `json:"host"`      // advertised connect host/IP

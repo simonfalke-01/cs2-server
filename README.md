@@ -39,7 +39,9 @@ flowchart TD
 
 ```
 docker/cs2/            Modded CS2 image (SwiftlyS2)
+docker/cs2/cfg/        Game-mode cfg bundles (competitive/wingman/deathmatch/1v1)
 plugins/SamplePlugin/  Sample SwiftlyS2 C# plugin
+plugins/Arena1v1/      Winner-stays 1v1 arena SwiftlyS2 plugin
 cmd/orchestrator/      Orchestrator API service
 cmd/bot/               Discord bot
 internal/model/        Shared domain types (leaf package)
@@ -106,8 +108,32 @@ docker compose --profile bot up -d --build
 
 Then in Discord:
 
-- `/create map:de_dust2 bots:4` → returns a `connect <ip>:<port>` string
+- `/create map:de_dust2 mode:1v1 bots:4` → returns a `connect <ip>:<port>` string
 - `/list`, `/status id:<id>`, `/restart id:<id>`, `/stop id:<id>`
+
+## Game modes
+
+`/create mode:` (and the API `mode` field) selects a game-mode preset. Each
+preset maps a friendly name to Valve's `game_type`/`game_mode`, a default slot
+count, and an in-game cfg bundle (`docker/cs2/cfg/<mode>.cfg`) the server execs
+on every map load:
+
+| Mode          | Description              | Slots | cfg              |
+|---------------|--------------------------|-------|------------------|
+| `competitive` | Standard 5v5 competitive | 10    | `competitive.cfg`|
+| `wingman`     | 2v2 Wingman              | 4     | `wingman.cfg`    |
+| `deathmatch`  | Free-for-all deathmatch  | 16    | `deathmatch.cfg` |
+| `1v1`         | Winner-stays 1v1 arena   | 12    | `1v1.cfg`        |
+
+Explicit `maxplayers`/`game_type`/`game_mode` on the request still override the
+preset's defaults. The orchestrator passes the chosen mode to the container as
+`CS2_MODE`; presets are defined in `internal/gamemode` (shared by the API, bot,
+and orchestrator) and the default is `CS2C_DEFAULT_MODE` (default `competitive`).
+
+**1v1 arena**: `mode:1v1` activates the `Arena1v1` SwiftlyS2 plugin
+(`plugins/Arena1v1`), which runs a winner-stays queue — two players duel each
+round, the survivor stays, and the next queued player rotates in. The plugin is
+inert on every other mode (gated on `CS2_MODE`), so one image serves all modes.
 
 ## Deploying on a Linux VPS
 

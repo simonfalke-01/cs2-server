@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/brandonli/cs2-server/internal/gamemode"
 )
 
 // Config holds all settings for the control plane. Secrets are sourced from the
@@ -39,6 +41,7 @@ type Config struct {
 
 	// Defaults applied to new servers
 	DefaultMap        string
+	DefaultMode       string // game-mode preset applied when none is requested
 	DefaultMaxPlayers int
 	DefaultGSLT       string // fallback Steam GSLT for public servers
 	SteamAPIKey       string // optional, for future stats/workshop features
@@ -64,6 +67,7 @@ func Load() (*Config, error) {
 		SharedVolume:    getEnv("CS2C_SHARED_VOLUME", "cs2-shared"),
 		PublicIP:        getEnv("CS2C_PUBLIC_IP", "127.0.0.1"),
 		DefaultMap:      getEnv("CS2C_DEFAULT_MAP", "de_inferno"),
+		DefaultMode:     getEnv("CS2C_DEFAULT_MODE", gamemode.Default),
 		DefaultGSLT:     getEnv("CS2C_DEFAULT_GSLT", ""),
 		SteamAPIKey:     getEnv("CS2C_STEAM_API_KEY", ""),
 		DiscordToken:    getEnv("DISCORD_TOKEN", ""),
@@ -90,6 +94,11 @@ func Load() (*Config, error) {
 	}
 
 	c.SharedGameFiles = getEnvBool("CS2C_SHARED_GAME_FILES", false)
+
+	if !gamemode.IsValid(c.DefaultMode) {
+		return nil, fmt.Errorf("config: CS2C_DEFAULT_MODE %q is not a known game mode (valid: %s)",
+			c.DefaultMode, strings.Join(gamemode.Names(), ", "))
+	}
 
 	if c.GamePortMin > c.GamePortMax {
 		return nil, fmt.Errorf("config: CS2C_GAME_PORT_MIN (%d) must be <= CS2C_GAME_PORT_MAX (%d)", c.GamePortMin, c.GamePortMax)

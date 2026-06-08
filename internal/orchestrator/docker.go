@@ -18,6 +18,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 
+	"github.com/brandonli/cs2-server/internal/gamemode"
 	"github.com/brandonli/cs2-server/internal/ports"
 	"github.com/brandonli/cs2-server/internal/rcon"
 	"github.com/brandonli/cs2-server/internal/store"
@@ -38,6 +39,7 @@ type DockerConfig struct {
 	GamePortMax       int
 	DefaultGSLT       string
 	DefaultMap        string
+	DefaultMode       string
 	DefaultMaxPlayers int
 
 	// Shared game files (OverlayFS/fuse-overlayfs) mode: all instances share one
@@ -117,6 +119,7 @@ func (m *DockerManager) Create(ctx context.Context, opts CreateOptions) (*Instan
 		OwnerID:    opts.OwnerID,
 		Name:       opts.Name,
 		Map:        opts.Map,
+		Mode:       opts.Mode,
 		Status:     StatusStarting,
 		Public:     opts.Public,
 		Host:       m.cfg.PublicIP,
@@ -190,6 +193,7 @@ func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts
 		"CS2_STARTMAP=" + opts.Map,
 		"CS2_GAMETYPE=" + strconv.Itoa(opts.GameType),
 		"CS2_GAMEMODE=" + strconv.Itoa(opts.GameMode),
+		"CS2_MODE=" + opts.Mode,
 		"CS2_LAN=" + lan,
 		"SRCDS_TOKEN=" + gslt,
 	}
@@ -548,11 +552,29 @@ func (m *DockerManager) applyDefaults(opts *CreateOptions) {
 	if opts.Map == "" {
 		opts.Map = m.cfg.DefaultMap
 	}
-	if opts.MaxPlayers <= 0 {
-		opts.MaxPlayers = m.cfg.DefaultMaxPlayers
-	}
 	if opts.Name == "" {
 		opts.Name = "cs2-server"
+	}
+
+	// Resolve the game-mode preset. An empty/unknown request mode falls back to
+	// the control-plane default; the preset seeds GameType/GameMode/MaxPlayers
+	// only where the request left them unset, so explicit values still win.
+	if opts.Mode == "" {
+		opts.Mode = m.cfg.DefaultMode
+	}
+	if preset, ok := gamemode.Lookup(opts.Mode); ok {
+		opts.Mode = preset.Name // canonicalize casing/spacing
+		if opts.GameType == 0 && opts.GameMode == 0 {
+			opts.GameType = preset.GameType
+			opts.GameMode = preset.GameMode
+		}
+		if opts.MaxPlayers <= 0 {
+			opts.MaxPlayers = preset.MaxPlayers
+		}
+	}
+
+	if opts.MaxPlayers <= 0 {
+		opts.MaxPlayers = m.cfg.DefaultMaxPlayers
 	}
 	if opts.GameMode == 0 && opts.GameType == 0 {
 		// Default to competitive (type 0, mode 1).

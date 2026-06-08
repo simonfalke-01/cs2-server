@@ -27,6 +27,7 @@ func sampleInstance(id, owner string) *model.Instance {
 		OwnerID:    owner,
 		Name:       "test",
 		Map:        "de_inferno",
+		Mode:       "1v1",
 		Status:     model.StatusRunning,
 		Public:     true,
 		Host:       "1.2.3.4",
@@ -53,6 +54,9 @@ func TestPutGetRoundtrip(t *testing.T) {
 	}
 	if got.OwnerID != "owner1" || got.GamePort != 27015 || !got.Public {
 		t.Fatalf("roundtrip mismatch: %+v", got)
+	}
+	if got.Mode != "1v1" {
+		t.Fatalf("mode not persisted: %q", got.Mode)
 	}
 	if got.RCONPass != "secret" {
 		t.Fatalf("rcon pass not persisted")

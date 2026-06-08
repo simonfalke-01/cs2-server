@@ -1,9 +1,27 @@
 package bot
 
-import "github.com/bwmarrin/discordgo"
+import (
+	"github.com/bwmarrin/discordgo"
+
+	"github.com/brandonli/cs2-server/internal/gamemode"
+)
 
 // optInt is a helper for optional integer min values in command options.
 func optFloat(f float64) *float64 { return &f }
+
+// modeChoices builds the Discord choice list for the /create mode option from
+// the game-mode preset registry, so the bot and orchestrator stay in sync.
+func modeChoices() []*discordgo.ApplicationCommandOptionChoice {
+	presets := gamemode.All()
+	out := make([]*discordgo.ApplicationCommandOptionChoice, 0, len(presets))
+	for _, p := range presets {
+		out = append(out, &discordgo.ApplicationCommandOptionChoice{
+			Name:  p.Name + " — " + p.Description,
+			Value: p.Name,
+		})
+	}
+	return out
+}
 
 // commandDefs returns the slash-command schema registered with Discord.
 func commandDefs() []*discordgo.ApplicationCommand {
@@ -17,6 +35,13 @@ func commandDefs() []*discordgo.ApplicationCommand {
 					Name:        "map",
 					Description: "Start map (e.g. de_inferno)",
 					Required:    false,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "mode",
+					Description: "Game mode preset",
+					Required:    false,
+					Choices:     modeChoices(),
 				},
 				{
 					Type:        discordgo.ApplicationCommandOptionString,

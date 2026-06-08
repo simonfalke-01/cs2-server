@@ -7,7 +7,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
+	"github.com/brandonli/cs2-server/internal/gamemode"
 	"github.com/brandonli/cs2-server/internal/model"
 	"github.com/brandonli/cs2-server/internal/orchestrator"
 )
@@ -46,6 +48,7 @@ type createRequest struct {
 	OwnerID    string `json:"owner_id"`
 	Name       string `json:"name"`
 	Map        string `json:"map"`
+	Mode       string `json:"mode"`
 	GameType   int    `json:"game_type"`
 	GameMode   int    `json:"game_mode"`
 	MaxPlayers int    `json:"max_players"`
@@ -76,6 +79,10 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	if req.Mode != "" && !gamemode.IsValid(req.Mode) {
+		writeError(w, http.StatusBadRequest, "unknown mode (valid: "+strings.Join(gamemode.Names(), ", ")+")")
+		return
+	}
 	if req.Public && req.GSLT == "" {
 		// The manager may still substitute a default GSLT; we only warn here by
 		// allowing it through. Public without any GSLT will fail to be
@@ -99,6 +106,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		OwnerID:    req.OwnerID,
 		Name:       req.Name,
 		Map:        req.Map,
+		Mode:       req.Mode,
 		GameType:   req.GameType,
 		GameMode:   req.GameMode,
 		MaxPlayers: req.MaxPlayers,

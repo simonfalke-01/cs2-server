@@ -20,6 +20,7 @@ func (b *Bot) handleCreate(ctx context.Context, s *discordgo.Session, i *discord
 		OwnerID:    userID(i),
 		Name:       opts.str("name", ""),
 		Map:        opts.str("map", ""),
+		Mode:       opts.str("mode", ""),
 		MaxPlayers: int(opts.intv("maxplayers", 0)),
 		BotQuota:   int(opts.intv("bots", 0)),
 		Public:     opts.boolv("public", false),
@@ -37,8 +38,8 @@ func (b *Bot) handleCreate(ctx context.Context, s *discordgo.Session, i *discord
 		visibility = "public"
 	}
 	msg := fmt.Sprintf(
-		"**Server created** `%s`\nName: %s\nMap: `%s`\nVisibility: %s\nConnect: `connect %s`",
-		inst.ID, orDash(inst.Name), inst.Map, visibility, inst.Connect,
+		"**Server created** `%s`\nName: %s\nMap: `%s`\nMode: `%s`\nVisibility: %s\nConnect: `connect %s`",
+		inst.ID, orDash(inst.Name), inst.Map, orDash(inst.Mode), visibility, inst.Connect,
 	)
 	if inst.Public && req.GSLT == "" {
 		msg += "\n_Note: public server started without a GSLT may not appear in the server browser._"
@@ -66,8 +67,8 @@ func (b *Bot) handleList(ctx context.Context, s *discordgo.Session, i *discordgo
 	var sb strings.Builder
 	sb.WriteString("**Your CS2 servers:**\n")
 	for _, in := range list {
-		sb.WriteString(fmt.Sprintf("- `%s` — %s — `%s` — `connect %s` — %s\n",
-			in.ID, orDash(in.Name), in.Map, in.Connect, in.Status))
+		sb.WriteString(fmt.Sprintf("- `%s` — %s — `%s` (%s) — `connect %s` — %s\n",
+			in.ID, orDash(in.Name), in.Map, orDash(in.Mode), in.Connect, in.Status))
 	}
 	b.followup(s, i, sb.String())
 }

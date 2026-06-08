@@ -89,9 +89,12 @@ High-value gaps in what already exists.
 - [ ] **SourceTV / demo recording.** Wire `TV_ENABLE/TV_PORT/TV_AUTORECORD`
   through the orchestrator and allocate the extra UDP port; optional demo upload
   in `post.sh`.
-- [ ] **Game-mode presets** (competitive / wingman / deathmatch / retake /
-  surf) as a single `/create mode:` choice mapping to `game_type`/`game_mode`/
-  cfg bundles.
+- [x] **Game-mode presets** (competitive / wingman / deathmatch / **1v1**) as a
+  single `/create mode:` choice mapping to `game_type`/`game_mode`/cfg bundles.
+  Presets live in `internal/gamemode` (shared by api/bot/orchestrator); cfg
+  bundles in `docker/cs2/cfg/`; default via `CS2C_DEFAULT_MODE`. The `1v1` mode
+  ships a winner-stays arena SwiftlyS2 plugin (`plugins/Arena1v1`, gated on
+  `CS2_MODE`). _Extend with retake/surf presets + more arena tuning as needed._
 - [ ] **Plugin management.** Per-server plugin selection, upload/registry of
   SwiftlyS2 plugins, and hot-reload, instead of the single bundled set.
 - [ ] **Live config tuning** over RCON (change map, kick, exec cfg) from Discord.

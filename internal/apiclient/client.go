@@ -40,6 +40,7 @@ type CreateRequest struct {
 	OwnerID    string `json:"owner_id"`
 	Name       string `json:"name"`
 	Map        string `json:"map"`
+	Mode       string `json:"mode"`
 	GameType   int    `json:"game_type"`
 	GameMode   int    `json:"game_mode"`
 	MaxPlayers int    `json:"max_players"`

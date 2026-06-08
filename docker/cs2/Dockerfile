@@ -66,6 +66,11 @@ RUN chmod +x /opt/cs2-hooks/*.sh && chown -R steam:steam /opt/cs2-hooks
 COPY --from=plugins /out /opt/cs2-plugins
 RUN chown -R steam:steam /opt/cs2-plugins
 
+# Game-mode cfg bundles (synced into csgo/cfg/ on boot; pre.sh wires the active
+# mode's cfg into server.cfg). Works in shared mode too (synced per-instance).
+COPY docker/cs2/cfg /opt/cs2-cfg
+RUN chown -R steam:steam /opt/cs2-cfg
+
 # Optional directory for extra user-supplied plugins (mounted by orchestrator).
 RUN mkdir -p /plugins && chown steam:steam /plugins
 

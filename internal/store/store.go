@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no CGO)
@@ -58,6 +59,7 @@ CREATE TABLE IF NOT EXISTS instances (
 	owner_id     TEXT NOT NULL,
 	name         TEXT NOT NULL,
 	map          TEXT NOT NULL,
+	mode         TEXT NOT NULL DEFAULT '',
 	status       TEXT NOT NULL,
 	public       INTEGER NOT NULL DEFAULT 0,
 	host         TEXT NOT NULL,
@@ -72,6 +74,13 @@ CREATE INDEX IF NOT EXISTS idx_instances_owner ON instances(owner_id);
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("store: migrate: %w", err)
 	}
+	// Add columns introduced after the initial schema. SQLite has no
+	// "ADD COLUMN IF NOT EXISTS", so tolerate the duplicate-column error on
+	// databases that already have it.
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE instances ADD COLUMN mode TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("store: migrate add mode: %w", err)
+	}
 	return nil
 }
 
@@ -79,13 +88,14 @@ CREATE INDEX IF NOT EXISTS idx_instances_owner ON instances(owner_id);
 func (s *Store) Put(ctx context.Context, in *model.Instance) error {
 	const q = `
 INSERT INTO instances
-	(id, backend_id, owner_id, name, map, status, public, host, game_port, rcon_port, rcon_pass, max_players, created_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+	(id, backend_id, owner_id, name, map, mode, status, public, host, game_port, rcon_port, rcon_pass, max_players, created_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
 	backend_id=excluded.backend_id,
 	owner_id=excluded.owner_id,
 	name=excluded.name,
 	map=excluded.map,
+	mode=excluded.mode,
 	status=excluded.status,
 	public=excluded.public,
 	host=excluded.host,
@@ -95,7 +105,7 @@ ON CONFLICT(id) DO UPDATE SET
 	max_players=excluded.max_players;
 `
 	_, err := s.db.ExecContext(ctx, q,
-		in.ID, in.BackendID, in.OwnerID, in.Name, in.Map, string(in.Status),
+		in.ID, in.BackendID, in.OwnerID, in.Name, in.Map, in.Mode, string(in.Status),
 		boolToInt(in.Public), in.Host, in.GamePort, in.RCONPort, in.RCONPass,
 		in.MaxPlayers, in.CreatedAt.Unix(),
 	)
@@ -173,7 +183,7 @@ func (s *Store) CountByOwner(ctx context.Context, ownerID string) (int, error) {
 	return n, nil
 }
 
-const selectCols = `SELECT id, backend_id, owner_id, name, map, status, public, host, game_port, rcon_port, rcon_pass, max_players, created_at FROM instances`
+const selectCols = `SELECT id, backend_id, owner_id, name, map, mode, status, public, host, game_port, rcon_port, rcon_pass, max_players, created_at FROM instances`
 
 // rowScanner is implemented by both *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -188,7 +198,7 @@ func scanInstance(r rowScanner) (*model.Instance, error) {
 		created int64
 	)
 	if err := r.Scan(
-		&in.ID, &in.BackendID, &in.OwnerID, &in.Name, &in.Map, &status,
+		&in.ID, &in.BackendID, &in.OwnerID, &in.Name, &in.Map, &in.Mode, &status,
 		&public, &in.Host, &in.GamePort, &in.RCONPort, &in.RCONPass,
 		&in.MaxPlayers, &created,
 	); err != nil {

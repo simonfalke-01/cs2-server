@@ -43,4 +43,26 @@ if [[ -d /plugins ]] && [[ -n "$(ls -A /plugins 2>/dev/null)" ]]; then
     echo "[mods] User plugins synced from /plugins."
 fi
 
+# --- Game-mode cfg bundles (both modes) ----------------------------------
+# Install the mode cfg bundles baked into the image at /opt/cs2-cfg into
+# csgo/cfg/, then make server.cfg exec the requested mode's cfg. CS2 execs
+# csgo/cfg/server.cfg on map load, so this applies the mode ruleset every map.
+CFG_DIR="${CSGO_DIR}/cfg"
+if [[ -d /opt/cs2-cfg ]] && [[ -n "$(ls -A /opt/cs2-cfg 2>/dev/null)" ]]; then
+    mkdir -p "${CFG_DIR}"
+    cp -a /opt/cs2-cfg/. "${CFG_DIR}/"
+    echo "[mods] Mode cfg bundles synced from /opt/cs2-cfg."
+fi
+if [[ -n "${CS2_MODE:-}" ]] && [[ -f "${CFG_DIR}/${CS2_MODE}.cfg" ]]; then
+    SERVER_CFG="${CFG_DIR}/server.cfg"
+    EXEC_LINE="exec ${CS2_MODE}.cfg"
+    touch "${SERVER_CFG}"
+    # Drop any previous mode exec line we added, then append the current one
+    # (idempotent across restarts / mode changes).
+    grep -v '^exec .*\.cfg # cs2-server mode$' "${SERVER_CFG}" > "${SERVER_CFG}.tmp" 2>/dev/null || true
+    mv "${SERVER_CFG}.tmp" "${SERVER_CFG}" 2>/dev/null || true
+    echo "${EXEC_LINE} # cs2-server mode" >> "${SERVER_CFG}"
+    echo "[mods] server.cfg set to exec ${CS2_MODE}.cfg."
+fi
+
 echo "[mods] pre.sh complete."
