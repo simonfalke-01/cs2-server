@@ -49,7 +49,8 @@ ARG SWIFTLY_FILE="swiftlys2-linux-v1.3.5-with-runtimes.zip"
 RUN set -eux; \
     mkdir -p /opt/cs2-mods /tmp/mods; \
     cd /tmp/mods; \
-    curl -fsSL "https://github.com/swiftly-solution/swiftlys2/releases/download/${SWIFTLY_VERSION}/${SWIFTLY_FILE}" -o sw.zip; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+        "https://github.com/swiftly-solution/swiftlys2/releases/download/${SWIFTLY_VERSION}/${SWIFTLY_FILE}" -o sw.zip; \
     unzip -oq sw.zip; \
     cp -a swiftlys2-*/addons /opt/cs2-mods/; \
     cd /; rm -rf /tmp/mods; \
