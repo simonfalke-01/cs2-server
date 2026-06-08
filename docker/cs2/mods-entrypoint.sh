@@ -47,9 +47,26 @@ fi
 
 echo "[overlay] Mounting overlay: lower=${LOWER} upper=${UPPER} -> ${STEAMAPPDIR}"
 mkdir -p "${UPPER}" "${WORK}" "${STEAMAPPDIR}"
-mount -t overlay overlay \
-    -o "lowerdir=${LOWER},upperdir=${UPPER},workdir=${WORK}" \
-    "${STEAMAPPDIR}"
+
+# Try a kernel OverlayFS mount first (fast). Under rootless/userns Docker the
+# kernel refuses it ("Invalid argument"), so fall back to fuse-overlayfs, which
+# works unprivileged when /dev/fuse is available.
+if mount -t overlay overlay \
+        -o "lowerdir=${LOWER},upperdir=${UPPER},workdir=${WORK},userxattr" \
+        "${STEAMAPPDIR}" 2>/dev/null \
+   || mount -t overlay overlay \
+        -o "lowerdir=${LOWER},upperdir=${UPPER},workdir=${WORK}" \
+        "${STEAMAPPDIR}" 2>/dev/null; then
+    echo "[overlay] kernel overlay mounted."
+elif command -v fuse-overlayfs >/dev/null 2>&1; then
+    echo "[overlay] kernel overlay unavailable; using fuse-overlayfs."
+    fuse-overlayfs \
+        -o "lowerdir=${LOWER},upperdir=${UPPER},workdir=${WORK}" \
+        "${STEAMAPPDIR}"
+else
+    echo "[overlay] ERROR: no overlay backend (kernel overlay blocked and fuse-overlayfs missing)" >&2
+    exit 1
+fi
 
 # The merged tree must be owned by steam (uid 1000) so the server can write.
 chown steam:steam "${STEAMAPPDIR}" "${UPPER}" "${WORK}"

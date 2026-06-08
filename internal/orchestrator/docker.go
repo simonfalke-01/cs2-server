@@ -245,11 +245,19 @@ func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts
 		},
 	}
 	if m.cfg.SharedGameFiles {
-		// Mounting the OverlayFS inside the container requires CAP_SYS_ADMIN,
-		// and the default AppArmor profile blocks mount(2); disable it. The
+		// Mounting the overlay inside the container requires CAP_SYS_ADMIN, and
+		// the default AppArmor profile blocks mount(2); disable it. The
 		// entrypoint mounts the overlay as root, then drops to the steam user.
+		//
+		// On rootless/userns Docker the kernel refuses overlay mounts, so the
+		// entrypoint falls back to fuse-overlayfs, which needs /dev/fuse.
 		hostCfg.CapAdd = []string{"SYS_ADMIN"}
 		hostCfg.SecurityOpt = []string{"apparmor=unconfined"}
+		hostCfg.Devices = []container.DeviceMapping{{
+			PathOnHost:        "/dev/fuse",
+			PathInContainer:   "/dev/fuse",
+			CgroupPermissions: "rwm",
+		}}
 	}
 
 	name := "cs2-" + inst.ID

@@ -16,8 +16,10 @@ USER root
 ENV HOMEDIR="/home/steam"
 
 # .NET (bundled in the CSS "with-runtime" zip) needs ICU or invariant mode.
+# fuse-overlayfs is used in shared-game-files mode on rootless/userns Docker,
+# where kernel OverlayFS mounts are not permitted.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl unzip libicu-dev \
+    && apt-get install -y --no-install-recommends ca-certificates curl unzip libicu-dev fuse-overlayfs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
