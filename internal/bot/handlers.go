@@ -140,11 +140,14 @@ func (b *Bot) handleStop(ctx context.Context, s *discordgo.Session, i *discordgo
 func (b *Bot) handleKillAll(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
 	b.defer_(s, i)
 
-	// Scope the bulk stop to the caller's own servers when owner-scoped; an
-	// empty owner targets every server (admin/global bot).
-	owner := ""
-	if b.ownerScoped {
-		owner = userID(i)
+	// Guild admins (Administrator / Manage Server) can stop every server in the
+	// guild; everyone else is limited to their own servers. An empty owner
+	// targets all servers; a non-empty owner scopes the bulk stop to that user.
+	owner := userID(i)
+	scope := "your"
+	if isAdmin(i) || !b.ownerScoped {
+		owner = ""
+		scope = "all"
 	}
 
 	res, err := b.api.StopAll(ctx, owner)
@@ -157,7 +160,7 @@ func (b *Bot) handleKillAll(ctx context.Context, s *discordgo.Session, i *discor
 		return
 	}
 
-	msg := fmt.Sprintf("Stopped and removed %d server(s).", res.Stopped)
+	msg := fmt.Sprintf("Stopped and removed %d %s server(s).", res.Stopped, scope)
 	if len(res.Failed) > 0 {
 		msg += fmt.Sprintf("\n⚠️ Failed to stop %d: `%s`", len(res.Failed), strings.Join(res.Failed, "`, `"))
 	}
@@ -303,6 +306,17 @@ func userID(i *discordgo.InteractionCreate) string {
 		return i.User.ID
 	}
 	return ""
+}
+
+// isAdmin reports whether the invoking guild member holds Administrator or
+// Manage Server. Discord computes Member.Permissions for the interaction
+// (including role + channel overrides), so no extra API call is needed.
+func isAdmin(i *discordgo.InteractionCreate) bool {
+	if i.Member == nil {
+		return false
+	}
+	const adminMask = discordgo.PermissionAdministrator | discordgo.PermissionManageServer
+	return i.Member.Permissions&adminMask != 0
 }
 
 func orDash(s string) string {
