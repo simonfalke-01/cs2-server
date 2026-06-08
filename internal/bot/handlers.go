@@ -180,9 +180,10 @@ func (b *Bot) handleKillAll(ctx context.Context, s *discordgo.Session, i *discor
 }
 
 // guardOwnership ensures a user can only mutate their own servers when the bot
-// is owner-scoped.
+// is owner-scoped. Guild admins (Administrator / Manage Server) bypass the
+// check and may act on any server in the guild by id.
 func (b *Bot) guardOwnership(ctx context.Context, i *discordgo.InteractionCreate, id string) error {
-	if !b.ownerScoped {
+	if !b.ownerScoped || isAdmin(i) {
 		return nil
 	}
 	mine, err := b.api.List(ctx, userID(i))
