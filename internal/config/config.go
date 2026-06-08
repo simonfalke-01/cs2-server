@@ -21,6 +21,13 @@ type Config struct {
 	PluginsDir string // host path to compiled plugins mounted into containers (read-only)
 	DataRoot   string // host path under which per-instance game data volumes live
 
+	// Shared game files (OverlayFS). When enabled, all instances share one
+	// read-only ~40GB game copy and each server only stores a thin writable
+	// layer. Requires a Linux host with OverlayFS (i.e. a real VPS, not Docker
+	// Desktop on macOS) and grants game containers CAP_SYS_ADMIN to mount.
+	SharedGameFiles bool   // CS2C_SHARED_GAME_FILES
+	SharedGameDir   string // CS2C_SHARED_GAME_DIR: host path holding the seeded shared copy
+
 	// Networking / port allocation for on-demand servers
 	GamePortMin int    // inclusive lower bound for UDP game ports
 	GamePortMax int    // inclusive upper bound for UDP game ports
@@ -51,6 +58,7 @@ func Load() (*Config, error) {
 		CS2Image:        getEnv("CS2C_IMAGE", "cs2-server/cs2:latest"),
 		PluginsDir:      getEnv("CS2C_PLUGINS_DIR", ""),
 		DataRoot:        getEnv("CS2C_DATA_ROOT", "data/instances"),
+		SharedGameDir:   getEnv("CS2C_SHARED_GAME_DIR", "data/shared"),
 		PublicIP:        getEnv("CS2C_PUBLIC_IP", "127.0.0.1"),
 		DefaultMap:      getEnv("CS2C_DEFAULT_MAP", "de_inferno"),
 		DefaultGSLT:     getEnv("CS2C_DEFAULT_GSLT", ""),
@@ -77,6 +85,8 @@ func Load() (*Config, error) {
 	if c.IdleShutdownMinutes, err = getEnvInt("CS2C_IDLE_SHUTDOWN_MINUTES", 30); err != nil {
 		return nil, err
 	}
+
+	c.SharedGameFiles = getEnvBool("CS2C_SHARED_GAME_FILES", false)
 
 	if c.GamePortMin > c.GamePortMax {
 		return nil, fmt.Errorf("config: CS2C_GAME_PORT_MIN (%d) must be <= CS2C_GAME_PORT_MAX (%d)", c.GamePortMin, c.GamePortMax)
@@ -117,4 +127,19 @@ func getEnvInt(key string, def int) (int, error) {
 		return 0, fmt.Errorf("config: %s must be an integer, got %q", key, v)
 	}
 	return n, nil
+}
+
+func getEnvBool(key string, def bool) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
 }

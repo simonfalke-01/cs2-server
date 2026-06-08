@@ -54,6 +54,8 @@ func run(log *slog.Logger) error {
 		DefaultGSLT:       cfg.DefaultGSLT,
 		DefaultMap:        cfg.DefaultMap,
 		DefaultMaxPlayers: cfg.DefaultMaxPlayers,
+		SharedGameFiles:   cfg.SharedGameFiles,
+		SharedGameDir:     cfg.SharedGameDir,
 	}, st)
 	if err != nil {
 		return err

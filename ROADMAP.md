@@ -29,6 +29,9 @@ This document tracks what's done and what's upcoming/unimplemented.
 - [x] Discord bot: `/create /list /status /restart /stop` (`internal/bot`)
 - [x] Idle-server auto-shutdown reaper (`internal/reaper`)
 - [x] Configurable public (GSLT) vs private/LAN servers
+- [x] **Shared game files (OverlayFS)** — opt-in (`CS2C_SHARED_GAME_FILES`): one
+  seeded read-only game copy shared by all instances + thin per-instance writable
+  layer; auto-seeds on first create; fast (seconds) server starts
 - [x] Unit tests (ports, rcon, store); compose files + env examples
 
 ---
@@ -127,6 +130,9 @@ The `ServerManager` interface is the seam (see
   API, so running it in a container requires identical host/container paths (see
   `deploy/controlplane.compose.yml`). Documented but sharp-edged.
 - No authentication on the orchestrator API (Phase A).
+- Disk: in the default (non-shared) mode each server stores its own ~40–60GB
+  game copy. Enable `CS2C_SHARED_GAME_FILES=true` to share one copy (needs a
+  Linux host with OverlayFS; grants game containers `CAP_SYS_ADMIN`).
 - `Status` returns `online` even when RCON isn't ready yet (best-effort).
 - Plugins are global to all servers via one mounted dir (Phase C).
 - Version coupling: `CounterStrikeSharp.API` NuGet and the CSS runtime in the

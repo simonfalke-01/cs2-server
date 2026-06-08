@@ -104,6 +104,71 @@ Then in Discord:
 - `/create map:de_dust2 bots:4` → returns a `connect <ip>:<port>` string
 - `/list`, `/status id:<id>`, `/restart id:<id>`, `/stop id:<id>`
 
+## Deploying on a Linux VPS (recommended)
+
+Run **everything on the VPS** — game servers, orchestrator, and bot. The
+orchestrator must share the host's Docker engine and filesystem (it passes host
+paths to the Docker API and reaches RCON over `127.0.0.1`).
+
+You only need **Docker** on the VPS; the Go binaries and the C# plugin are built
+inside throwaway containers (no Go/.NET install required).
+
+```bash
+# 1. Docker
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker "$USER" && newgrp docker
+
+# 2. Clone
+git clone git@github.com:simonfalke-01/cs2-server.git && cd cs2-server
+
+# 3. Build the modded game image
+make image
+
+# 4. Build the sample plugin (no .NET install)
+docker run --rm -v "$PWD":/w -w /w/plugins/SamplePlugin mcr.microsoft.com/dotnet/sdk:10.0 \
+  bash -c 'dotnet build -c Release && mkdir -p /w/plugins-dist/SamplePlugin \
+           && cp bin/Release/net10.0/SamplePlugin.dll /w/plugins-dist/SamplePlugin/'
+
+# 5. Build the Go binaries (no Go install)
+docker run --rm -v "$PWD":/w -w /w -e CGO_ENABLED=0 golang:1.26 \
+  bash -c 'go build -o bin/orchestrator ./cmd/orchestrator && go build -o bin/bot ./cmd/bot'
+
+# 6. Configure
+cp deploy/controlplane.env.example deploy/controlplane.env
+#   set CS2C_PUBLIC_IP=<vps ip>, CS2C_PLUGINS_DIR / CS2C_DATA_ROOT to absolute
+#   paths, DISCORD_TOKEN, DISCORD_APP_ID, CS2C_ORCHESTRATOR_URL=http://127.0.0.1:8080
+#   and (recommended) CS2C_SHARED_GAME_FILES=true  (see below)
+
+# 7. Run
+set -a; source deploy/controlplane.env; set +a
+./bin/orchestrator &     # or a systemd unit
+./bin/bot &
+```
+
+**Firewall:** allow inbound **TCP 22** and **UDP 27015–27115** (your port pool).
+Keep the orchestrator API (**TCP 8080**) and RCON ports **closed to the
+Internet** — the API currently has no auth and RCON is reached via localhost.
+
+### Shared game files (OverlayFS) — save disk, start servers in seconds
+
+By default each server stores its **own ~40–60GB game copy**, so on an 80GB disk
+you can only run one. Enable shared mode to keep **one** read-only game copy that
+all servers overlay with a tiny (~MB) writable layer:
+
+```
+CS2C_SHARED_GAME_FILES=true
+CS2C_SHARED_GAME_DIR=/absolute/path/to/data/shared
+```
+
+- The first `/create` runs a one-off **seeder** container that downloads the
+  game once and bakes in Metamod + CounterStrikeSharp (slow, ~40GB). Subsequent
+  servers start in **seconds** and cost only a few MB each.
+- Requires a real Linux host with OverlayFS (**not** Docker Desktop on macOS).
+  Game containers get `CAP_SYS_ADMIN` + `apparmor=unconfined` to mount the
+  overlay; the entrypoint mounts as root then drops to the unprivileged `steam`
+  user to run the server.
+- Stopping a server removes its per-instance layer, reclaiming the space.
+
 ## How plugin loading works
 
 CounterStrikeSharp loads plugins from

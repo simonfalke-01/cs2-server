@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -39,6 +41,10 @@ type DockerConfig struct {
 	DefaultGSLT       string
 	DefaultMap        string
 	DefaultMaxPlayers int
+
+	// Shared game files (OverlayFS) mode.
+	SharedGameFiles bool   // share one read-only game copy across instances
+	SharedGameDir   string // host path of the seeded shared copy (lowerdir)
 }
 
 // DockerManager implements ServerManager on top of the local Docker engine.
@@ -47,6 +53,8 @@ type DockerManager struct {
 	store *store.Store
 	ports *ports.Allocator
 	cfg   DockerConfig
+
+	seedMu sync.Mutex // serializes the one-off shared-game-files seeding
 }
 
 var _ ServerManager = (*DockerManager)(nil)
@@ -138,6 +146,11 @@ func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts
 	if err := m.ensureImage(ctx); err != nil {
 		return "", err
 	}
+	if m.cfg.SharedGameFiles {
+		if err := m.ensureSeeded(ctx); err != nil {
+			return "", err
+		}
+	}
 
 	lan := "1"
 	if inst.Public {
@@ -162,6 +175,12 @@ func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts
 	if opts.BotQuota > 0 {
 		env = append(env, "CS2_BOT_QUOTA="+strconv.Itoa(opts.BotQuota))
 	}
+	if m.cfg.SharedGameFiles {
+		env = append(env,
+			"CS2_SHARED_MODE=1",
+			"CS2_SHARED_LOWER=/shared/cs2",
+		)
+	}
 
 	gamePortStr := strconv.Itoa(inst.GamePort)
 	rconPortStr := strconv.Itoa(inst.RCONPort)
@@ -180,10 +199,27 @@ func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts
 	}
 
 	mounts := []string{}
-	// Per-instance persistent game data (so SteamCMD download is reused).
-	dataDir, err := filepath.Abs(filepath.Join(m.cfg.DataRoot, inst.ID))
-	if err == nil {
-		mounts = append(mounts, dataDir+":/home/steam/cs2-dedicated")
+	if m.cfg.SharedGameFiles {
+		// Shared mode: mount the seeded read-only game copy as the overlay
+		// lowerdir, plus a tiny per-instance dir for the writable upper/work.
+		sharedAbs, err := filepath.Abs(m.cfg.SharedGameDir)
+		if err != nil {
+			return "", fmt.Errorf("docker: resolve shared dir: %w", err)
+		}
+		instAbs, err := filepath.Abs(filepath.Join(m.cfg.DataRoot, inst.ID))
+		if err != nil {
+			return "", fmt.Errorf("docker: resolve instance dir: %w", err)
+		}
+		mounts = append(mounts,
+			sharedAbs+":/shared/cs2:ro",
+			instAbs+":/instance",
+		)
+	} else {
+		// Per-instance persistent game data (full copy; SteamCMD download reused).
+		dataDir, err := filepath.Abs(filepath.Join(m.cfg.DataRoot, inst.ID))
+		if err == nil {
+			mounts = append(mounts, dataDir+":/home/steam/cs2-dedicated")
+		}
 	}
 	if m.cfg.PluginsDir != "" {
 		if pluginsAbs, err := filepath.Abs(m.cfg.PluginsDir); err == nil {
@@ -207,6 +243,13 @@ func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts
 		RestartPolicy: container.RestartPolicy{
 			Name: container.RestartPolicyUnlessStopped,
 		},
+	}
+	if m.cfg.SharedGameFiles {
+		// Mounting the OverlayFS inside the container requires CAP_SYS_ADMIN,
+		// and the default AppArmor profile blocks mount(2); disable it. The
+		// entrypoint mounts the overlay as root, then drops to the steam user.
+		hostCfg.CapAdd = []string{"SYS_ADMIN"}
+		hostCfg.SecurityOpt = []string{"apparmor=unconfined"}
 	}
 
 	name := "cs2-" + inst.ID
@@ -245,6 +288,78 @@ func (m *DockerManager) ensureImage(ctx context.Context) error {
 	return nil
 }
 
+// seededMarker is the file seed.sh writes when the shared copy is ready.
+const seededMarker = ".cs2-seeded"
+
+// ensureSeeded makes sure the shared read-only game copy exists. If the marker
+// is absent it runs a one-off seeding container (the slow ~40GB download) and
+// waits for it to finish. Concurrent Create calls are serialized.
+func (m *DockerManager) ensureSeeded(ctx context.Context) error {
+	sharedAbs, err := filepath.Abs(m.cfg.SharedGameDir)
+	if err != nil {
+		return fmt.Errorf("docker: resolve shared dir: %w", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(sharedAbs, seededMarker)); statErr == nil {
+		return nil // already seeded
+	}
+
+	m.seedMu.Lock()
+	defer m.seedMu.Unlock()
+
+	// Re-check after acquiring the lock (another Create may have seeded it).
+	if _, statErr := os.Stat(filepath.Join(sharedAbs, seededMarker)); statErr == nil {
+		return nil
+	}
+
+	if err := os.MkdirAll(sharedAbs, 0o755); err != nil {
+		return fmt.Errorf("docker: create shared dir: %w", err)
+	}
+
+	const name = "cs2-seed"
+	// Remove any stale seeder from a previous failed attempt.
+	_ = m.cli.ContainerRemove(ctx, name, container.RemoveOptions{Force: true})
+
+	cfg := &container.Config{
+		Image:      m.cfg.Image,
+		Entrypoint: []string{"/opt/cs2-hooks/seed.sh", "/shared/cs2"},
+		Labels:     map[string]string{labelManaged: "true", "cs2-server.role": "seed"},
+	}
+	hostCfg := &container.HostConfig{
+		Binds:       []string{sharedAbs + ":/shared/cs2"},
+		AutoRemove:  false,
+		NetworkMode: "bridge",
+	}
+
+	created, err := m.cli.ContainerCreate(ctx, cfg, hostCfg, &dnetwork.NetworkingConfig{}, nil, name)
+	if err != nil {
+		return fmt.Errorf("docker: create seeder: %w", err)
+	}
+	defer m.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+
+	if err := m.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("docker: start seeder: %w", err)
+	}
+
+	// Wait for the seeder to complete (this is the long download).
+	statusCh, errCh := m.cli.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
+	select {
+	case werr := <-errCh:
+		if werr != nil {
+			return fmt.Errorf("docker: wait seeder: %w", werr)
+		}
+	case st := <-statusCh:
+		if st.StatusCode != 0 {
+			return fmt.Errorf("docker: seeder exited with code %d", st.StatusCode)
+		}
+	}
+
+	if _, statErr := os.Stat(filepath.Join(sharedAbs, seededMarker)); statErr != nil {
+		return fmt.Errorf("docker: seeding finished but marker missing at %s", sharedAbs)
+	}
+	return nil
+}
+
 // Stop stops and removes the instance's container and record.
 func (m *DockerManager) Stop(ctx context.Context, id string) error {
 	inst, err := m.store.Get(ctx, id)
@@ -257,6 +372,11 @@ func (m *DockerManager) Stop(ctx context.Context, id string) error {
 		if rerr := m.cli.ContainerRemove(ctx, inst.BackendID, container.RemoveOptions{Force: true}); rerr != nil {
 			return fmt.Errorf("docker: remove container: %w", rerr)
 		}
+	}
+	// Reclaim the per-instance data dir (overlay upper/work in shared mode, or
+	// the full game copy otherwise). Best-effort; don't fail the stop on error.
+	if instDir, derr := filepath.Abs(filepath.Join(m.cfg.DataRoot, inst.ID)); derr == nil {
+		_ = os.RemoveAll(instDir)
 	}
 	m.releasePorts(inst)
 	return m.store.Delete(ctx, id)

@@ -42,12 +42,17 @@ RUN set -eux; \
     cd /; rm -rf /tmp/mods; \
     chown -R steam:steam /opt/cs2-mods
 
-# Install our pre/post hooks and the wrapper entrypoint.
-COPY pre.sh post.sh mods-entrypoint.sh /opt/cs2-hooks/
+# Install our hooks, helpers and the wrapper entrypoint.
+COPY pre.sh post.sh mods-entrypoint.sh install-mods.sh seed.sh /opt/cs2-hooks/
 RUN chmod +x /opt/cs2-hooks/*.sh && chown -R steam:steam /opt/cs2-hooks
 
 # Directory where the orchestrator mounts user-supplied compiled plugins.
 RUN mkdir -p /plugins && chown steam:steam /plugins
+
+# Mountpoints used in shared-game-files mode (OverlayFS):
+#   /shared    read-only seeded game copy (lowerdir), bind-mounted by orchestrator
+#   /instance  per-instance writable layer (upper/work), bind-mounted per server
+RUN mkdir -p /shared /instance && chown steam:steam /shared /instance
 
 # Let .NET run without ICU; CSS only needs invariant globalization.
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
