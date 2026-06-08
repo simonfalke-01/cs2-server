@@ -13,7 +13,9 @@ import (
 )
 
 func (b *Bot) handleCreate(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
-	b.defer_(s, i)
+	// Created servers are announced publicly (non-ephemeral) so the channel can
+	// see and use the connect string.
+	b.deferPublic(s, i)
 
 	opts := optionMap(i)
 	req := apiclient.CreateRequest{
@@ -29,22 +31,35 @@ func (b *Bot) handleCreate(ctx context.Context, s *discordgo.Session, i *discord
 
 	inst, err := b.api.Create(ctx, req)
 	if err != nil {
-		b.followupErr(s, i, "create", err)
+		b.editErr(s, i, "create", err)
 		return
 	}
 
-	visibility := "private (LAN)"
+	visibility := "🔒 private (LAN)"
 	if inst.Public {
-		visibility = "public"
+		visibility = "🌐 public"
 	}
-	msg := fmt.Sprintf(
-		"**Server created** `%s`\nName: %s\nMap: `%s`\nMode: `%s`\nVisibility: %s\nConnect: `connect %s`",
-		inst.ID, orDash(inst.Name), inst.Map, orDash(inst.Mode), visibility, inst.Connect,
-	)
+
+	embed := &discordgo.MessageEmbed{
+		Title:       "✅ Server created",
+		Color:       0x57F287, // Discord green
+		Description: fmt.Sprintf("Connect: `connect %s`", inst.Connect),
+		Fields: []*discordgo.MessageEmbedField{
+			{Name: "Name", Value: orDash(inst.Name), Inline: true},
+			{Name: "Map", Value: codeOrDash(inst.Map), Inline: true},
+			{Name: "Mode", Value: codeOrDash(inst.Mode), Inline: true},
+			{Name: "Visibility", Value: visibility, Inline: true},
+			{Name: "ID", Value: "`" + inst.ID + "`", Inline: true},
+		},
+		Footer: &discordgo.MessageEmbedFooter{Text: "cs2-server"},
+	}
 	if inst.Public && req.GSLT == "" {
-		msg += "\n_Note: public server started without a GSLT may not appear in the server browser._"
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:  "⚠️ Note",
+			Value: "Public server started without a GSLT may not appear in the server browser.",
+		})
 	}
-	b.followup(s, i, msg)
+	b.editEmbed(s, i, embed)
 }
 
 func (b *Bot) handleList(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -182,6 +197,39 @@ func (b *Bot) defer_(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	})
 }
 
+// deferPublic acknowledges the interaction with a non-ephemeral deferred
+// response (a public "thinking…" placeholder) that is later filled via
+// editResponse/editEmbed. Use this for commands whose result should be visible
+// to the whole channel.
+func (b *Bot) deferPublic(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{},
+	})
+}
+
+// editEmbed fills the original (deferred) interaction response with an embed.
+// Editing the original message keeps the deferred placeholder's visibility, so
+// after deferPublic this produces exactly one public message.
+func (b *Bot) editEmbed(s *discordgo.Session, i *discordgo.InteractionCreate, embed *discordgo.MessageEmbed) {
+	_, err := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+		Embeds: &[]*discordgo.MessageEmbed{embed},
+	})
+	if err != nil {
+		b.log.Error("edit response failed", "err", err)
+	}
+}
+
+// editErr fills the original (deferred) interaction response with an error
+// message, matching the placeholder's visibility set at defer time.
+func (b *Bot) editErr(s *discordgo.Session, i *discordgo.InteractionCreate, action string, err error) {
+	b.log.Warn("command error", "action", action, "err", err)
+	msg := b.errMsg(action, err)
+	if _, e := s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &msg}); e != nil {
+		b.log.Error("edit error response failed", "err", e)
+	}
+}
+
 func (b *Bot) respond(s *discordgo.Session, i *discordgo.InteractionCreate, msg string) {
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -200,15 +248,22 @@ func (b *Bot) followup(s *discordgo.Session, i *discordgo.InteractionCreate, msg
 }
 
 func (b *Bot) followupErr(s *discordgo.Session, i *discordgo.InteractionCreate, action string, err error) {
-	var apiErr *apiclient.APIError
-	msg := fmt.Sprintf("Failed to %s: %v", action, err)
-	if errors.As(err, &apiErr) {
-		msg = fmt.Sprintf("Failed to %s: %s", action, apiErr.Message)
-	} else if errors.Is(err, model.ErrNotFound) {
-		msg = fmt.Sprintf("Failed to %s: server not found or not yours.", action)
-	}
 	b.log.Warn("command error", "action", action, "err", err)
-	b.followup(s, i, msg)
+	b.followup(s, i, b.errMsg(action, err))
+}
+
+// errMsg renders a user-facing failure message for an action, unwrapping API
+// and not-found errors into friendlier text.
+func (b *Bot) errMsg(action string, err error) string {
+	var apiErr *apiclient.APIError
+	switch {
+	case errors.As(err, &apiErr):
+		return fmt.Sprintf("Failed to %s: %s", action, apiErr.Message)
+	case errors.Is(err, model.ErrNotFound):
+		return fmt.Sprintf("Failed to %s: server not found or not yours.", action)
+	default:
+		return fmt.Sprintf("Failed to %s: %v", action, err)
+	}
 }
 
 // --- misc ----------------------------------------------------------------
@@ -228,4 +283,12 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// codeOrDash wraps a non-empty value in inline code, or returns a dash.
+func codeOrDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "—"
+	}
+	return "`" + s + "`"
 }
