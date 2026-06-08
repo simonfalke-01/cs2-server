@@ -140,12 +140,14 @@ func (b *Bot) handleStop(ctx context.Context, s *discordgo.Session, i *discordgo
 func (b *Bot) handleKillAll(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
 	b.defer_(s, i)
 
-	// Guild admins (Administrator / Manage Server) can stop every server in the
-	// guild; everyone else is limited to their own servers. An empty owner
-	// targets all servers; a non-empty owner scopes the bulk stop to that user.
+	// Guild admins (Administrator / Manage Server) stop every server in the
+	// guild, unless they pass mine:true to limit it to their own. Everyone else
+	// is always restricted to their own servers. An empty owner targets all
+	// servers; a non-empty owner scopes the bulk stop to that user.
 	owner := userID(i)
 	scope := "your"
-	if isAdmin(i) || !b.ownerScoped {
+	adminWide := (isAdmin(i) || !b.ownerScoped) && !optionMap(i).boolv("mine", false)
+	if adminWide {
 		owner = ""
 		scope = "all"
 	}

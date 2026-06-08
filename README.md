@@ -111,7 +111,8 @@ Then in Discord:
 - `/create map:de_dust2 mode:1v1 bots:4` → returns a `connect <ip>:<port>` string
 - `/list`, `/status id:<id>`, `/restart id:<id>`, `/stop id:<id>`
 - `/killall` — stops your servers; **guild admins** (Administrator / Manage
-  Server) stop every server in the guild
+  Server) stop every server in the guild, or pass `mine:true` to stop only their
+  own
 
 ## Game modes
 
