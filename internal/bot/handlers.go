@@ -65,10 +65,20 @@ func (b *Bot) handleCreate(ctx context.Context, s *discordgo.Session, i *discord
 func (b *Bot) handleList(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
 	b.defer_(s, i)
 
+	// Guild admins (Administrator / Manage Server) list every server in the
+	// guild, unless they pass mine:true to limit it to their own. Everyone else
+	// is always restricted to their own servers.
 	owner := ""
 	if b.ownerScoped {
 		owner = userID(i)
 	}
+	adminWide := (isAdmin(i) || !b.ownerScoped) && !optionMap(i).boolv("mine", false)
+	header := "**Your CS2 servers:**"
+	if adminWide {
+		owner = ""
+		header = "**All CS2 servers:**"
+	}
+
 	list, err := b.api.List(ctx, owner)
 	if err != nil {
 		b.followupErr(s, i, "list", err)
@@ -80,7 +90,7 @@ func (b *Bot) handleList(ctx context.Context, s *discordgo.Session, i *discordgo
 	}
 
 	var sb strings.Builder
-	sb.WriteString("**Your CS2 servers:**\n")
+	sb.WriteString(header + "\n")
 	for _, in := range list {
 		sb.WriteString(fmt.Sprintf("- `%s` — %s — `%s` (%s) — `connect %s` — %s\n",
 			in.ID, orDash(in.Name), in.Map, orDash(in.Mode), in.Connect, in.Status))

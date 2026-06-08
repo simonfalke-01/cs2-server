@@ -81,7 +81,15 @@ func commandDefs() []*discordgo.ApplicationCommand {
 		},
 		{
 			Name:        "list",
-			Description: "List your CS2 servers",
+			Description: "List your CS2 servers (admins: every server in the guild)",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionBoolean,
+					Name:        "mine",
+					Description: "Admins only: list just your own servers, not the whole guild",
+					Required:    false,
+				},
+			},
 		},
 		{
 			Name:        "status",
