@@ -1,0 +1,29 @@
+# Go
+/bin/
+*.exe
+*.test
+*.out
+
+# Build artifacts
+/plugins-dist/
+
+# .NET
+**/bin/
+**/obj/
+
+# Secrets / local config
+deploy/cs2.env
+.env
+*.env
+!*.env.example
+
+# Local orchestrator state
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

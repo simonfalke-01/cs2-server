@@ -1,0 +1,376 @@
+package orchestrator
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"path/filepath"
+	"strconv"
+	"time"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
+	dnetwork "github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
+
+	"github.com/brandonli/cs2-server/internal/ports"
+	"github.com/brandonli/cs2-server/internal/rcon"
+	"github.com/brandonli/cs2-server/internal/store"
+)
+
+// Label keys applied to managed containers so we can find/reconcile them.
+const (
+	labelManaged  = "cs2-server.managed"
+	labelInstance = "cs2-server.instance-id"
+	labelOwner    = "cs2-server.owner-id"
+)
+
+// DockerConfig configures the Docker-backed ServerManager.
+type DockerConfig struct {
+	Image             string
+	PluginsDir        string // host path mounted read-only into each container at /plugins
+	DataRoot          string // host dir under which per-instance volumes are created
+	PublicIP          string // advertised connect IP
+	GamePortMin       int
+	GamePortMax       int
+	DefaultGSLT       string
+	DefaultMap        string
+	DefaultMaxPlayers int
+}
+
+// DockerManager implements ServerManager on top of the local Docker engine.
+type DockerManager struct {
+	cli   *client.Client
+	store *store.Store
+	ports *ports.Allocator
+	cfg   DockerConfig
+}
+
+var _ ServerManager = (*DockerManager)(nil)
+
+// NewDockerManager builds a manager, reconciling port reservations from any
+// instances already recorded in the store.
+func NewDockerManager(ctx context.Context, cfg DockerConfig, st *store.Store) (*DockerManager, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, fmt.Errorf("docker: new client: %w", err)
+	}
+
+	alloc := ports.New(cfg.GamePortMin, cfg.GamePortMax)
+	existing, err := st.List(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	for _, in := range existing {
+		alloc.Reserve(in.GamePort)
+		alloc.Reserve(in.RCONPort)
+	}
+
+	return &DockerManager{cli: cli, store: st, ports: alloc, cfg: cfg}, nil
+}
+
+// Close releases the Docker client.
+func (m *DockerManager) Close() error { return m.cli.Close() }
+
+// Create provisions and starts a new CS2 server container.
+func (m *DockerManager) Create(ctx context.Context, opts CreateOptions) (*Instance, error) {
+	m.applyDefaults(&opts)
+
+	gamePort, err := m.ports.Acquire()
+	if err != nil {
+		return nil, ErrNoPorts
+	}
+	rconPort, err := m.ports.Acquire()
+	if err != nil {
+		m.ports.Release(gamePort)
+		return nil, ErrNoPorts
+	}
+
+	id := newID()
+	rconPass := newSecret()
+
+	gslt := opts.GSLT
+	if opts.Public && gslt == "" {
+		gslt = m.cfg.DefaultGSLT
+	}
+
+	inst := &Instance{
+		ID:         id,
+		OwnerID:    opts.OwnerID,
+		Name:       opts.Name,
+		Map:        opts.Map,
+		Status:     StatusStarting,
+		Public:     opts.Public,
+		Host:       m.cfg.PublicIP,
+		GamePort:   gamePort,
+		RCONPort:   rconPort,
+		RCONPass:   rconPass,
+		MaxPlayers: opts.MaxPlayers,
+		CreatedAt:  time.Now(),
+	}
+
+	// Persist before starting so a crash mid-create is recoverable/cleanable.
+	if err := m.store.Put(ctx, inst); err != nil {
+		m.releasePorts(inst)
+		return nil, err
+	}
+
+	containerID, err := m.startContainer(ctx, inst, opts, gslt)
+	if err != nil {
+		inst.Status = StatusError
+		_ = m.store.SetStatus(ctx, id, StatusError)
+		m.releasePorts(inst)
+		return nil, err
+	}
+
+	inst.BackendID = containerID
+	inst.Status = StatusRunning
+	if err := m.store.Put(ctx, inst); err != nil {
+		return nil, err
+	}
+	return inst, nil
+}
+
+func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts CreateOptions, gslt string) (string, error) {
+	if err := m.ensureImage(ctx); err != nil {
+		return "", err
+	}
+
+	lan := "1"
+	if inst.Public {
+		lan = "0"
+	}
+
+	env := []string{
+		"CS2_SERVERNAME=" + opts.Name,
+		"CS2_PORT=" + strconv.Itoa(inst.GamePort),
+		"CS2_RCON_PORT=" + strconv.Itoa(inst.RCONPort),
+		"CS2_RCONPW=" + inst.RCONPass,
+		"CS2_MAXPLAYERS=" + strconv.Itoa(opts.MaxPlayers),
+		"CS2_STARTMAP=" + opts.Map,
+		"CS2_GAMETYPE=" + strconv.Itoa(opts.GameType),
+		"CS2_GAMEMODE=" + strconv.Itoa(opts.GameMode),
+		"CS2_LAN=" + lan,
+		"SRCDS_TOKEN=" + gslt,
+	}
+	if opts.Password != "" {
+		env = append(env, "CS2_PW="+opts.Password)
+	}
+	if opts.BotQuota > 0 {
+		env = append(env, "CS2_BOT_QUOTA="+strconv.Itoa(opts.BotQuota))
+	}
+
+	gamePortStr := strconv.Itoa(inst.GamePort)
+	rconPortStr := strconv.Itoa(inst.RCONPort)
+
+	// CS2 listens on the same port for tcp+udp; RCON uses the simpleproxy TCP
+	// port from the base image when CS2_RCON_PORT is set.
+	udpGame := nat.Port(gamePortStr + "/udp")
+	tcpGame := nat.Port(gamePortStr + "/tcp")
+	tcpRCON := nat.Port(rconPortStr + "/tcp")
+
+	exposed := nat.PortSet{udpGame: {}, tcpGame: {}, tcpRCON: {}}
+	bindings := nat.PortMap{
+		udpGame: []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: gamePortStr}},
+		tcpGame: []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: gamePortStr}},
+		tcpRCON: []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: rconPortStr}},
+	}
+
+	mounts := []string{}
+	// Per-instance persistent game data (so SteamCMD download is reused).
+	dataDir, err := filepath.Abs(filepath.Join(m.cfg.DataRoot, inst.ID))
+	if err == nil {
+		mounts = append(mounts, dataDir+":/home/steam/cs2-dedicated")
+	}
+	if m.cfg.PluginsDir != "" {
+		if pluginsAbs, err := filepath.Abs(m.cfg.PluginsDir); err == nil {
+			mounts = append(mounts, pluginsAbs+":/plugins:ro")
+		}
+	}
+
+	cfg := &container.Config{
+		Image:        m.cfg.Image,
+		Env:          env,
+		ExposedPorts: exposed,
+		Labels: map[string]string{
+			labelManaged:  "true",
+			labelInstance: inst.ID,
+			labelOwner:    inst.OwnerID,
+		},
+	}
+	hostCfg := &container.HostConfig{
+		PortBindings: bindings,
+		Binds:        mounts,
+		RestartPolicy: container.RestartPolicy{
+			Name: container.RestartPolicyUnlessStopped,
+		},
+	}
+
+	name := "cs2-" + inst.ID
+	created, err := m.cli.ContainerCreate(ctx, cfg, hostCfg, &dnetwork.NetworkingConfig{}, nil, name)
+	if err != nil {
+		return "", fmt.Errorf("docker: create container: %w", err)
+	}
+	if err := m.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		// Best-effort cleanup of the created-but-unstarted container.
+		_ = m.cli.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true})
+		return "", fmt.Errorf("docker: start container: %w", err)
+	}
+	return created.ID, nil
+}
+
+// ensureImage pulls the configured image if it is not present locally.
+func (m *DockerManager) ensureImage(ctx context.Context) error {
+	_, _, err := m.cli.ImageInspectWithRaw(ctx, m.cfg.Image)
+	if err == nil {
+		return nil
+	}
+	// Not present: attempt a pull. Locally-built images won't be pullable, so a
+	// pull failure here is only fatal if the image is also absent (it is).
+	rc, perr := m.cli.ImagePull(ctx, m.cfg.Image, image.PullOptions{})
+	if perr != nil {
+		return fmt.Errorf("docker: image %q not found locally and pull failed: %w", m.cfg.Image, perr)
+	}
+	defer rc.Close()
+	// Drain the pull progress stream.
+	buf := make([]byte, 4096)
+	for {
+		if _, rerr := rc.Read(buf); rerr != nil {
+			break
+		}
+	}
+	return nil
+}
+
+// Stop stops and removes the instance's container and record.
+func (m *DockerManager) Stop(ctx context.Context, id string) error {
+	inst, err := m.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if inst.BackendID != "" {
+		timeout := 30
+		_ = m.cli.ContainerStop(ctx, inst.BackendID, container.StopOptions{Timeout: &timeout})
+		if rerr := m.cli.ContainerRemove(ctx, inst.BackendID, container.RemoveOptions{Force: true}); rerr != nil {
+			return fmt.Errorf("docker: remove container: %w", rerr)
+		}
+	}
+	m.releasePorts(inst)
+	return m.store.Delete(ctx, id)
+}
+
+// Restart restarts the instance's container.
+func (m *DockerManager) Restart(ctx context.Context, id string) error {
+	inst, err := m.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if inst.BackendID == "" {
+		return ErrNotFound
+	}
+	timeout := 30
+	if err := m.cli.ContainerRestart(ctx, inst.BackendID, container.StopOptions{Timeout: &timeout}); err != nil {
+		return fmt.Errorf("docker: restart: %w", err)
+	}
+	return m.store.SetStatus(ctx, id, StatusRunning)
+}
+
+// Get returns the recorded instance.
+func (m *DockerManager) Get(ctx context.Context, id string) (*Instance, error) {
+	return m.store.Get(ctx, id)
+}
+
+// List returns recorded instances, optionally filtered by owner.
+func (m *DockerManager) List(ctx context.Context, ownerID string) ([]*Instance, error) {
+	return m.store.List(ctx, ownerID)
+}
+
+// Status pulls live status from the container via RCON.
+func (m *DockerManager) Status(ctx context.Context, id string) (*LiveStatus, error) {
+	inst, err := m.store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	ls := &LiveStatus{MaxPlayers: inst.MaxPlayers, Map: inst.Map}
+
+	// Confirm the container is actually running.
+	insp, err := m.cli.ContainerInspect(ctx, inst.BackendID)
+	if err != nil || insp.State == nil || !insp.State.Running {
+		ls.Online = false
+		return ls, nil
+	}
+
+	addr := fmt.Sprintf("127.0.0.1:%d", inst.RCONPort)
+	raw, err := rcon.Run(ctx, addr, inst.RCONPass, "status", 5*time.Second)
+	if err != nil {
+		// Container is up but RCON may not be ready yet (still loading).
+		ls.Online = true
+		return ls, nil
+	}
+
+	parsed := rcon.ParseStatus(raw)
+	ls.Online = true
+	ls.Raw = raw
+	if parsed.Map != "" {
+		ls.Map = parsed.Map
+	}
+	ls.PlayerCount = parsed.PlayerCount
+	if parsed.MaxPlayers > 0 {
+		ls.MaxPlayers = parsed.MaxPlayers
+	}
+	return ls, nil
+}
+
+// ListManagedContainers returns IDs of containers we manage (for reconciliation).
+func (m *DockerManager) ListManagedContainers(ctx context.Context) ([]string, error) {
+	f := filters.NewArgs()
+	f.Add("label", labelManaged+"=true")
+	list, err := m.cli.ContainerList(ctx, container.ListOptions{All: true, Filters: f})
+	if err != nil {
+		return nil, fmt.Errorf("docker: list: %w", err)
+	}
+	ids := make([]string, 0, len(list))
+	for _, c := range list {
+		ids = append(ids, c.ID)
+	}
+	return ids, nil
+}
+
+func (m *DockerManager) applyDefaults(opts *CreateOptions) {
+	if opts.Map == "" {
+		opts.Map = m.cfg.DefaultMap
+	}
+	if opts.MaxPlayers <= 0 {
+		opts.MaxPlayers = m.cfg.DefaultMaxPlayers
+	}
+	if opts.Name == "" {
+		opts.Name = "cs2-server"
+	}
+	if opts.GameMode == 0 && opts.GameType == 0 {
+		// Default to competitive (type 0, mode 1).
+		opts.GameMode = 1
+	}
+}
+
+func (m *DockerManager) releasePorts(inst *Instance) {
+	m.ports.Release(inst.GamePort)
+	m.ports.Release(inst.RCONPort)
+}
+
+// newID returns a short, URL-safe instance id.
+func newID() string {
+	var b [5]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// newSecret returns a random RCON password.
+func newSecret() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
