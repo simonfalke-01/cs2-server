@@ -1,0 +1,89 @@
+# CS2 server platform — entire stack runs in Docker Compose.
+#
+#   docker compose up -d --build
+#
+# builds the control plane (orchestrator + optional Discord bot) and the CS2
+# game image (with Metamod + CounterStrikeSharp + the bundled sample plugin),
+# then starts the orchestrator. The orchestrator launches CS2 game-server
+# containers on demand via the Docker socket, attaching them to the shared
+# `cs2net` network so it can reach their RCON by container name.
+#
+# Nothing runs outside Docker. No host paths. Portable to any machine with
+# Docker; on rootless/userns Docker, shared game files use fuse-overlayfs
+# automatically.
+
+name: cs2-server
+
+services:
+  # Builds the CS2 game image so it's available locally for the orchestrator to
+  # launch. This one-shot container exits immediately; it exists only so
+  # `compose up --build` produces the image.
+  game-image:
+    build:
+      context: .
+      dockerfile: docker/cs2/Dockerfile
+    image: cs2-server/cs2:latest
+    command: ["true"]
+    restart: "no"
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: deploy/orchestrator.Dockerfile
+    image: cs2-server/orchestrator:latest
+    container_name: cs2-orchestrator
+    restart: unless-stopped
+    depends_on:
+      game-image:
+        condition: service_completed_successfully
+    environment:
+      CS2C_API_ADDR: ":8080"
+      CS2C_IMAGE: "cs2-server/cs2:latest"
+      CS2C_NETWORK: "cs2net"
+      CS2C_SHARED_VOLUME: "cs2-shared"
+      CS2C_SHARED_GAME_FILES: "${CS2C_SHARED_GAME_FILES:-true}"
+      CS2C_PUBLIC_IP: "${CS2C_PUBLIC_IP:-127.0.0.1}"
+      CS2C_GAME_PORT_MIN: "${CS2C_GAME_PORT_MIN:-27015}"
+      CS2C_GAME_PORT_MAX: "${CS2C_GAME_PORT_MAX:-27115}"
+      CS2C_DEFAULT_MAP: "${CS2C_DEFAULT_MAP:-de_inferno}"
+      CS2C_DEFAULT_MAXPLAYERS: "${CS2C_DEFAULT_MAXPLAYERS:-10}"
+      CS2C_DEFAULT_GSLT: "${CS2C_DEFAULT_GSLT:-}"
+      CS2C_IDLE_SHUTDOWN_MINUTES: "${CS2C_IDLE_SHUTDOWN_MINUTES:-30}"
+      CS2C_MAX_SERVERS_PER_USER: "${CS2C_MAX_SERVERS_PER_USER:-2}"
+      CS2C_STATE_PATH: "/state/cs2-server.db"
+    ports:
+      - "${CS2C_API_PORT:-18080}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - cs2-state:/state
+    networks:
+      - cs2net
+
+  bot:
+    build:
+      context: .
+      dockerfile: deploy/bot.Dockerfile
+    image: cs2-server/bot:latest
+    container_name: cs2-bot
+    restart: unless-stopped
+    profiles: ["bot"]
+    depends_on:
+      - orchestrator
+    environment:
+      DISCORD_TOKEN: "${DISCORD_TOKEN:-}"
+      DISCORD_APP_ID: "${DISCORD_APP_ID:-}"
+      DISCORD_GUILD_ID: "${DISCORD_GUILD_ID:-}"
+      CS2C_ORCHESTRATOR_URL: "http://orchestrator:8080"
+    networks:
+      - cs2net
+
+networks:
+  cs2net:
+    name: cs2net
+
+volumes:
+  cs2-state:
+  # Explicit name so it matches the volume the orchestrator mounts into game
+  # containers (CS2C_SHARED_VOLUME=cs2-shared).
+  cs2-shared:
+    name: cs2-shared

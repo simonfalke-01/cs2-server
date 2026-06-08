@@ -27,12 +27,17 @@ else
     echo "[mods] Shared mode: mods provided by read-only base layer."
 fi
 
-# --- Sync user plugins (both modes) --------------------------------------
-# Compiled CounterStrikeSharp plugins are mounted read-only at /plugins by the
-# orchestrator. Each plugin is a folder containing <Name>.dll.
+# --- Sync plugins (both modes) -------------------------------------------
+# Each plugin is a folder containing <Name>.dll. We sync, in order:
+#   1. plugins baked into the image at /opt/cs2-plugins (the bundled sample)
+#   2. extra user plugins optionally mounted at /plugins by the orchestrator
 CSS_PLUGINS_DIR="${CSGO_DIR}/addons/counterstrikesharp/plugins"
+mkdir -p "${CSS_PLUGINS_DIR}"
+if [[ -d /opt/cs2-plugins ]] && [[ -n "$(ls -A /opt/cs2-plugins 2>/dev/null)" ]]; then
+    cp -a /opt/cs2-plugins/. "${CSS_PLUGINS_DIR}/"
+    echo "[mods] Bundled plugins synced from /opt/cs2-plugins."
+fi
 if [[ -d /plugins ]] && [[ -n "$(ls -A /plugins 2>/dev/null)" ]]; then
-    mkdir -p "${CSS_PLUGINS_DIR}"
     cp -a /plugins/. "${CSS_PLUGINS_DIR}/"
     echo "[mods] User plugins synced from /plugins."
 fi

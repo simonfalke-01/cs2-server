@@ -46,8 +46,6 @@ func run(log *slog.Logger) error {
 
 	mgr, err := orchestrator.NewDockerManager(ctx, orchestrator.DockerConfig{
 		Image:             cfg.CS2Image,
-		PluginsDir:        cfg.PluginsDir,
-		DataRoot:          cfg.DataRoot,
 		PublicIP:          cfg.PublicIP,
 		GamePortMin:       cfg.GamePortMin,
 		GamePortMax:       cfg.GamePortMax,
@@ -55,7 +53,8 @@ func run(log *slog.Logger) error {
 		DefaultMap:        cfg.DefaultMap,
 		DefaultMaxPlayers: cfg.DefaultMaxPlayers,
 		SharedGameFiles:   cfg.SharedGameFiles,
-		SharedGameDir:     cfg.SharedGameDir,
+		SharedVolume:      cfg.SharedVolume,
+		Network:           cfg.Network,
 	}, st)
 	if err != nil {
 		return err

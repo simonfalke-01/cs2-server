@@ -9,6 +9,22 @@
 # `pre.sh` hook that the base image sources after the download, just before the
 # server starts.
 
+# --- Stage 1: build the bundled sample CounterStrikeSharp plugin -----------
+# Baked into the image so a fresh `docker compose up` ships a working plugin
+# with no host-side build. Drop more plugins under plugins/ to bundle them too.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS plugins
+WORKDIR /src
+COPY plugins/ ./plugins/
+RUN set -eux; \
+    mkdir -p /out; \
+    for proj in plugins/*/*.csproj; do \
+        name="$(basename "$(dirname "$proj")")"; \
+        dotnet build -c Release "$proj" -o "/build/$name"; \
+        mkdir -p "/out/$name"; \
+        cp "/build/$name/$name.dll" "/out/$name/"; \
+    done
+
+# --- Stage 2: the CS2 dedicated server image -------------------------------
 FROM joedwards32/cs2:latest
 
 USER root
@@ -45,15 +61,21 @@ RUN set -eux; \
     chown -R steam:steam /opt/cs2-mods
 
 # Install our hooks, helpers and the wrapper entrypoint.
-COPY pre.sh post.sh mods-entrypoint.sh install-mods.sh seed.sh /opt/cs2-hooks/
+# (Build context is the repo root so the plugins/ stage above can see sources.)
+COPY docker/cs2/pre.sh docker/cs2/post.sh docker/cs2/mods-entrypoint.sh \
+     docker/cs2/install-mods.sh docker/cs2/seed.sh /opt/cs2-hooks/
 RUN chmod +x /opt/cs2-hooks/*.sh && chown -R steam:steam /opt/cs2-hooks
 
-# Directory where the orchestrator mounts user-supplied compiled plugins.
+# Bundled, pre-built plugins (synced into CSS on boot by pre.sh).
+COPY --from=plugins /out /opt/cs2-plugins
+RUN chown -R steam:steam /opt/cs2-plugins
+
+# Optional directory for extra user-supplied plugins (mounted by orchestrator).
 RUN mkdir -p /plugins && chown steam:steam /plugins
 
 # Mountpoints used in shared-game-files mode (OverlayFS):
-#   /shared    read-only seeded game copy (lowerdir), bind-mounted by orchestrator
-#   /instance  per-instance writable layer (upper/work), bind-mounted per server
+#   /shared    read-only seeded game copy volume (lower at /shared/cs2)
+#   /instance  per-instance writable layer (upper/work)
 RUN mkdir -p /shared /instance && chown steam:steam /shared /instance
 
 # Let .NET run without ICU; CSS only needs invariant globalization.

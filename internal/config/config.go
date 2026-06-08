@@ -17,16 +17,20 @@ type Config struct {
 	StatePath string // path to the SQLite state file
 
 	// CS2 game image + container settings
-	CS2Image   string // docker image used for game servers
-	PluginsDir string // host path to compiled plugins mounted into containers (read-only)
-	DataRoot   string // host path under which per-instance game data volumes live
+	CS2Image string // docker image used for game servers
+
+	// Docker network that game containers join so the orchestrator can reach
+	// their RCON port by container name (set to the compose network).
+	Network string
+
+	// Named Docker volumes (no host paths; portable across machines).
+	SharedVolume string // shared seeded game copy (shared-files mode)
 
 	// Shared game files (OverlayFS). When enabled, all instances share one
 	// read-only ~40GB game copy and each server only stores a thin writable
-	// layer. Requires a Linux host with OverlayFS (i.e. a real VPS, not Docker
-	// Desktop on macOS) and grants game containers CAP_SYS_ADMIN to mount.
-	SharedGameFiles bool   // CS2C_SHARED_GAME_FILES
-	SharedGameDir   string // CS2C_SHARED_GAME_DIR: host path holding the seeded shared copy
+	// layer. Requires OverlayFS or fuse-overlayfs; grants game containers
+	// CAP_SYS_ADMIN + /dev/fuse to mount.
+	SharedGameFiles bool // CS2C_SHARED_GAME_FILES
 
 	// Networking / port allocation for on-demand servers
 	GamePortMin int    // inclusive lower bound for UDP game ports
@@ -56,9 +60,8 @@ func Load() (*Config, error) {
 		APIAddr:         getEnv("CS2C_API_ADDR", ":8080"),
 		StatePath:       getEnv("CS2C_STATE_PATH", "data/cs2-server.db"),
 		CS2Image:        getEnv("CS2C_IMAGE", "cs2-server/cs2:latest"),
-		PluginsDir:      getEnv("CS2C_PLUGINS_DIR", ""),
-		DataRoot:        getEnv("CS2C_DATA_ROOT", "data/instances"),
-		SharedGameDir:   getEnv("CS2C_SHARED_GAME_DIR", "data/shared"),
+		Network:         getEnv("CS2C_NETWORK", ""),
+		SharedVolume:    getEnv("CS2C_SHARED_VOLUME", "cs2-shared"),
 		PublicIP:        getEnv("CS2C_PUBLIC_IP", "127.0.0.1"),
 		DefaultMap:      getEnv("CS2C_DEFAULT_MAP", "de_inferno"),
 		DefaultGSLT:     getEnv("CS2C_DEFAULT_GSLT", ""),

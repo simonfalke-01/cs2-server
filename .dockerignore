@@ -1,0 +1,12 @@
+.git
+bin
+plugins-dist
+data
+**/bin
+**/obj
+*.db
+*.sqlite*
+deploy/*.env
+*.env
+!*.env.example
+.DS_Store

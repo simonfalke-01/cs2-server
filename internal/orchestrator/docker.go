@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	dnetwork "github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 
@@ -33,8 +32,6 @@ const (
 // DockerConfig configures the Docker-backed ServerManager.
 type DockerConfig struct {
 	Image             string
-	PluginsDir        string // host path mounted read-only into each container at /plugins
-	DataRoot          string // host dir under which per-instance volumes are created
 	PublicIP          string // advertised connect IP
 	GamePortMin       int
 	GamePortMax       int
@@ -42,9 +39,18 @@ type DockerConfig struct {
 	DefaultMap        string
 	DefaultMaxPlayers int
 
-	// Shared game files (OverlayFS) mode.
-	SharedGameFiles bool   // share one read-only game copy across instances
-	SharedGameDir   string // host path of the seeded shared copy (lowerdir)
+	// Shared game files (OverlayFS/fuse-overlayfs) mode: all instances share one
+	// read-only seeded game copy (SharedVolume) plus a thin per-instance layer.
+	SharedGameFiles bool
+
+	// Network is the Docker network that game containers join so the
+	// orchestrator can reach their RCON port by container name. When empty,
+	// RCON is dialed via 127.0.0.1 (only correct under host networking).
+	Network string
+
+	// SharedVolume is the named Docker volume holding the seeded shared game
+	// copy, mounted at /shared in shared-files mode.
+	SharedVolume string
 }
 
 // DockerManager implements ServerManager on top of the local Docker engine.
@@ -198,33 +204,25 @@ func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts
 		tcpRCON: []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: rconPortStr}},
 	}
 
+	// Per-instance writable data lives in its own Docker-managed named volume,
+	// so there are no host paths to coordinate and storage is portable.
+	instVolume := "cs2-data-" + inst.ID
+	if err := m.ensureVolume(ctx, instVolume); err != nil {
+		return "", err
+	}
+
 	mounts := []string{}
 	if m.cfg.SharedGameFiles {
-		// Shared mode: mount the seeded read-only game copy as the overlay
-		// lowerdir, plus a tiny per-instance dir for the writable upper/work.
-		sharedAbs, err := filepath.Abs(m.cfg.SharedGameDir)
-		if err != nil {
-			return "", fmt.Errorf("docker: resolve shared dir: %w", err)
-		}
-		instAbs, err := filepath.Abs(filepath.Join(m.cfg.DataRoot, inst.ID))
-		if err != nil {
-			return "", fmt.Errorf("docker: resolve instance dir: %w", err)
-		}
+		// Shared mode: mount the seeded read-only game copy (shared volume) as
+		// the overlay lowerdir, plus the per-instance volume for the writable
+		// upper/work layers.
 		mounts = append(mounts,
-			sharedAbs+":/shared/cs2:ro",
-			instAbs+":/instance",
+			m.cfg.SharedVolume+":/shared:ro",
+			instVolume+":/instance",
 		)
 	} else {
-		// Per-instance persistent game data (full copy; SteamCMD download reused).
-		dataDir, err := filepath.Abs(filepath.Join(m.cfg.DataRoot, inst.ID))
-		if err == nil {
-			mounts = append(mounts, dataDir+":/home/steam/cs2-dedicated")
-		}
-	}
-	if m.cfg.PluginsDir != "" {
-		if pluginsAbs, err := filepath.Abs(m.cfg.PluginsDir); err == nil {
-			mounts = append(mounts, pluginsAbs+":/plugins:ro")
-		}
+		// Per-instance full game copy (SteamCMD download reused across restarts).
+		mounts = append(mounts, instVolume+":/home/steam/cs2-dedicated")
 	}
 
 	cfg := &container.Config{
@@ -261,7 +259,17 @@ func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts
 	}
 
 	name := "cs2-" + inst.ID
-	created, err := m.cli.ContainerCreate(ctx, cfg, hostCfg, &dnetwork.NetworkingConfig{}, nil, name)
+
+	// Attach to the shared control-plane network so the orchestrator can reach
+	// this container's RCON port by name (works regardless of host networking).
+	netCfg := &dnetwork.NetworkingConfig{}
+	if m.cfg.Network != "" {
+		netCfg.EndpointsConfig = map[string]*dnetwork.EndpointSettings{
+			m.cfg.Network: {},
+		}
+	}
+
+	created, err := m.cli.ContainerCreate(ctx, cfg, hostCfg, netCfg, nil, name)
 	if err != nil {
 		return "", fmt.Errorf("docker: create container: %w", err)
 	}
@@ -296,32 +304,39 @@ func (m *DockerManager) ensureImage(ctx context.Context) error {
 	return nil
 }
 
-// seededMarker is the file seed.sh writes when the shared copy is ready.
-const seededMarker = ".cs2-seeded"
+// ensureVolume creates a named Docker volume if it does not already exist.
+func (m *DockerManager) ensureVolume(ctx context.Context, name string) error {
+	_, err := m.cli.VolumeInspect(ctx, name)
+	if err == nil {
+		return nil
+	}
+	if _, cerr := m.cli.VolumeCreate(ctx, volume.CreateOptions{
+		Name:   name,
+		Labels: map[string]string{labelManaged: "true"},
+	}); cerr != nil {
+		return fmt.Errorf("docker: create volume %q: %w", name, cerr)
+	}
+	return nil
+}
 
-// ensureSeeded makes sure the shared read-only game copy exists. If the marker
-// is absent it runs a one-off seeding container (the slow ~40GB download) and
-// waits for it to finish. Concurrent Create calls are serialized.
+// ensureSeeded makes sure the shared read-only game copy exists in the shared
+// volume. If not yet seeded it runs a one-off seeding container (the slow ~40GB
+// download) and waits for it to finish. Concurrent Create calls are serialized.
 func (m *DockerManager) ensureSeeded(ctx context.Context) error {
-	sharedAbs, err := filepath.Abs(m.cfg.SharedGameDir)
-	if err != nil {
-		return fmt.Errorf("docker: resolve shared dir: %w", err)
+	if err := m.ensureVolume(ctx, m.cfg.SharedVolume); err != nil {
+		return err
 	}
 
-	if _, statErr := os.Stat(filepath.Join(sharedAbs, seededMarker)); statErr == nil {
-		return nil // already seeded
+	if seeded, _ := m.isSeeded(ctx); seeded {
+		return nil
 	}
 
 	m.seedMu.Lock()
 	defer m.seedMu.Unlock()
 
 	// Re-check after acquiring the lock (another Create may have seeded it).
-	if _, statErr := os.Stat(filepath.Join(sharedAbs, seededMarker)); statErr == nil {
+	if seeded, _ := m.isSeeded(ctx); seeded {
 		return nil
-	}
-
-	if err := os.MkdirAll(sharedAbs, 0o755); err != nil {
-		return fmt.Errorf("docker: create shared dir: %w", err)
 	}
 
 	const name = "cs2-seed"
@@ -334,9 +349,7 @@ func (m *DockerManager) ensureSeeded(ctx context.Context) error {
 		Labels:     map[string]string{labelManaged: "true", "cs2-server.role": "seed"},
 	}
 	hostCfg := &container.HostConfig{
-		Binds:       []string{sharedAbs + ":/shared/cs2"},
-		AutoRemove:  false,
-		NetworkMode: "bridge",
+		Binds: []string{m.cfg.SharedVolume + ":/shared"},
 	}
 
 	created, err := m.cli.ContainerCreate(ctx, cfg, hostCfg, &dnetwork.NetworkingConfig{}, nil, name)
@@ -362,10 +375,43 @@ func (m *DockerManager) ensureSeeded(ctx context.Context) error {
 		}
 	}
 
-	if _, statErr := os.Stat(filepath.Join(sharedAbs, seededMarker)); statErr != nil {
-		return fmt.Errorf("docker: seeding finished but marker missing at %s", sharedAbs)
+	if seeded, _ := m.isSeeded(ctx); !seeded {
+		return fmt.Errorf("docker: seeding finished but marker missing in volume %q", m.cfg.SharedVolume)
 	}
 	return nil
+}
+
+// isSeeded checks for the .cs2-seeded marker inside the shared volume by running
+// a tiny throwaway container that tests for the file.
+func (m *DockerManager) isSeeded(ctx context.Context) (bool, error) {
+	cfg := &container.Config{
+		Image:      m.cfg.Image,
+		Entrypoint: []string{"sh", "-c", "test -f /shared/cs2/.cs2-seeded"},
+		Labels:     map[string]string{labelManaged: "true", "cs2-server.role": "probe"},
+	}
+	hostCfg := &container.HostConfig{
+		Binds:      []string{m.cfg.SharedVolume + ":/shared:ro"},
+		AutoRemove: false,
+	}
+	created, err := m.cli.ContainerCreate(ctx, cfg, hostCfg, &dnetwork.NetworkingConfig{}, nil, "")
+	if err != nil {
+		return false, err
+	}
+	defer m.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+
+	if err := m.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		return false, err
+	}
+	statusCh, errCh := m.cli.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
+	select {
+	case werr := <-errCh:
+		if werr != nil {
+			return false, werr
+		}
+	case st := <-statusCh:
+		return st.StatusCode == 0, nil
+	}
+	return false, nil
 }
 
 // Stop stops and removes the instance's container and record.
@@ -381,11 +427,9 @@ func (m *DockerManager) Stop(ctx context.Context, id string) error {
 			return fmt.Errorf("docker: remove container: %w", rerr)
 		}
 	}
-	// Reclaim the per-instance data dir (overlay upper/work in shared mode, or
-	// the full game copy otherwise). Best-effort; don't fail the stop on error.
-	if instDir, derr := filepath.Abs(filepath.Join(m.cfg.DataRoot, inst.ID)); derr == nil {
-		_ = os.RemoveAll(instDir)
-	}
+	// Reclaim the per-instance named volume (overlay upper/work in shared mode,
+	// or the full game copy otherwise). Best-effort; don't fail the stop.
+	_ = m.cli.VolumeRemove(ctx, "cs2-data-"+inst.ID, true)
 	m.releasePorts(inst)
 	return m.store.Delete(ctx, id)
 }
@@ -432,7 +476,13 @@ func (m *DockerManager) Status(ctx context.Context, id string) (*LiveStatus, err
 		return ls, nil
 	}
 
-	addr := fmt.Sprintf("127.0.0.1:%d", inst.RCONPort)
+	// Reach RCON by container name on the shared network when configured,
+	// otherwise fall back to localhost (host-network deployments).
+	rconHost := "127.0.0.1"
+	if m.cfg.Network != "" {
+		rconHost = "cs2-" + inst.ID
+	}
+	addr := fmt.Sprintf("%s:%d", rconHost, inst.RCONPort)
 	raw, err := rcon.Run(ctx, addr, inst.RCONPass, "status", 5*time.Second)
 	if err != nil {
 		// Container is up but RCON may not be ready yet (still loading).
