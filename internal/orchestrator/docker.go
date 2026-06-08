@@ -253,6 +253,12 @@ func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts
 			labelOwner:    inst.OwnerID,
 		},
 	}
+	if m.cfg.SharedGameFiles {
+		// The image defaults to the unprivileged "steam" user, but shared mode
+		// must mount the overlay as root first (the entrypoint then drops back
+		// to steam to run the server).
+		cfg.User = "0:0"
+	}
 	hostCfg := &container.HostConfig{
 		PortBindings: bindings,
 		Binds:        mounts,
