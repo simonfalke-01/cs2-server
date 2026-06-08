@@ -23,7 +23,9 @@ services:
       context: .
       dockerfile: docker/cs2/Dockerfile
     image: cs2-server/cs2:latest
-    command: ["true"]
+    # One-shot: building the image is the goal; override the server entrypoint so
+    # this container just exits successfully.
+    entrypoint: ["true"]
     restart: "no"
 
   orchestrator:
@@ -33,6 +35,8 @@ services:
     image: cs2-server/orchestrator:latest
     container_name: cs2-orchestrator
     restart: unless-stopped
+    # Runs as root: needs the Docker socket and write access to its state volume.
+    user: "0:0"
     depends_on:
       game-image:
         condition: service_completed_successfully
@@ -54,7 +58,9 @@ services:
     ports:
       - "${CS2C_API_PORT:-18080}:8080"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Docker socket. Defaults to the standard path; on rootless Docker set
+      # DOCKER_SOCK=/run/user/$UID/docker.sock in .env.
+      - "${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock"
       - cs2-state:/state
     networks:
       - cs2net

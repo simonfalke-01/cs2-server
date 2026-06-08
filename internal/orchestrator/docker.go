@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -132,20 +133,37 @@ func (m *DockerManager) Create(ctx context.Context, opts CreateOptions) (*Instan
 		return nil, err
 	}
 
+	// Provisioning can be very slow (first-time game-files seeding downloads
+	// ~40GB; even a warm start runs SteamCMD + loads CS2). Do it in the
+	// background with a detached context so the API responds immediately and a
+	// client disconnect never cancels provisioning. The instance is returned in
+	// the "starting" state; clients poll status to learn when it's running.
+	go m.provision(opts, inst, gslt)
+
+	return inst, nil
+}
+
+// provision performs the slow container bring-up off the request path.
+func (m *DockerManager) provision(opts CreateOptions, inst *Instance, gslt string) {
+	ctx := context.Background()
 	containerID, err := m.startContainer(ctx, inst, opts, gslt)
 	if err != nil {
+		m.log("provision failed", "id", inst.ID, "err", err)
 		inst.Status = StatusError
-		_ = m.store.SetStatus(ctx, id, StatusError)
-		m.releasePorts(inst)
-		return nil, err
+		_ = m.store.Put(ctx, inst)
+		return
 	}
-
 	inst.BackendID = containerID
 	inst.Status = StatusRunning
 	if err := m.store.Put(ctx, inst); err != nil {
-		return nil, err
+		m.log("provision persist failed", "id", inst.ID, "err", err)
 	}
-	return inst, nil
+}
+
+// log is a tiny stderr logger so the orchestrator records background failures
+// without pulling a logger dependency into the manager.
+func (m *DockerManager) log(msg string, kv ...any) {
+	fmt.Fprintf(os.Stderr, "orchestrator manager: %s %v\n", msg, kv)
 }
 
 func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts CreateOptions, gslt string) (string, error) {
