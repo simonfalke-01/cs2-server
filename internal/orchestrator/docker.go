@@ -447,7 +447,9 @@ func (m *DockerManager) Stop(ctx context.Context, id string) error {
 	if inst.BackendID != "" {
 		timeout := 30
 		_ = m.cli.ContainerStop(ctx, inst.BackendID, container.StopOptions{Timeout: &timeout})
-		if rerr := m.cli.ContainerRemove(ctx, inst.BackendID, container.RemoveOptions{Force: true}); rerr != nil {
+		// Treat an already-removed container as success so the instance record
+		// can always be cleaned up (e.g. after a manual docker rm).
+		if rerr := m.cli.ContainerRemove(ctx, inst.BackendID, container.RemoveOptions{Force: true}); rerr != nil && !client.IsErrNotFound(rerr) {
 			return fmt.Errorf("docker: remove container: %w", rerr)
 		}
 	}
