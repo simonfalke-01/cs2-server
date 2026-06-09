@@ -3,7 +3,9 @@ namespace Duel1v1;
 /// <summary>
 /// Curated 1v1 map pool used by !maps / !map / !votemap. Entries are either
 /// stock maps (changed via "changelevel") or Steam Workshop maps (changed via
-/// "ds_workshop_changelevel" using the workshop file id).
+/// "host_workshop_map" using the workshop file id — the command that loads a
+/// workshop map BY its numeric id, downloading it if missing; ds_workshop_changelevel
+/// takes a map NAME from a loaded collection, which is why passing an id failed).
 ///
 /// Players are never restricted to this pool — /create map: and an explicit
 /// !map &lt;name&gt; can load any map. This is just the convenient shortlist.
@@ -48,7 +50,7 @@ public static class MapPool
 
     /// <summary>The server console command that switches to this map.</summary>
     public static string ChangeCommand(MapEntry m)
-        => m.IsWorkshop ? $"ds_workshop_changelevel {m.WorkshopId}" : $"changelevel {m.Name}";
+        => m.IsWorkshop ? $"host_workshop_map {m.WorkshopId}" : $"changelevel {m.Name}";
 
     /// <summary>Change command for an arbitrary, possibly off-pool, map name.</summary>
     public static string ChangeCommandFor(string name)

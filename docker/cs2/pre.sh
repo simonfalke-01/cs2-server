@@ -23,6 +23,16 @@ if [[ "${CS2_SHARED_MODE:-0}" != "1" ]]; then
     # Marker used by the orchestrator's seeding step to know the shared game
     # copy has game files + mods + a patched gameinfo.gi ready to share.
     touch "${STEAMAPPDIR}/.cs2-seeded" 2>/dev/null || true
+
+    # Pre-cache the curated Steam Workshop pool once per instance (best-effort;
+    # never fatal). Shared mode skips this — those maps are already baked into
+    # the read-only lower layer by seed.sh.
+    if [[ ! -f "${STEAMAPPDIR}/.ws-prewarmed" ]]; then
+        # shellcheck source=/dev/null
+        source /opt/cs2-hooks/prewarm-workshop.sh
+        prewarm_workshop "${STEAMAPPDIR}/game"
+        touch "${STEAMAPPDIR}/.ws-prewarmed" 2>/dev/null || true
+    fi
 else
     echo "[mods] Shared mode: mods provided by read-only base layer."
 fi

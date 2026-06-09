@@ -65,6 +65,12 @@ public partial class Duel1v1 : BasePlugin
         Core.GameEvent.HookPre<EventRoundStart>(OnRoundStart);
         Core.GameEvent.HookPre<EventBuymenuOpen>(OnBuyMenuOpen);
 
+        // Map-change feedback: workshop download edges + "new map is live".
+        Core.GameEvent.HookPost<EventUgcFileDownloadStart>(OnUgcDownloadStart);
+        Core.GameEvent.HookPost<EventUgcFileDownloadFinished>(OnUgcDownloadFinished);
+        Core.GameEvent.HookPost<EventUgcMapDownloadError>(OnUgcDownloadError);
+        Core.GameEvent.HookPost<EventGameNewmap>(OnGameNewMap);
+
         EnterWarmup();
     }
 

@@ -39,6 +39,13 @@ fi
 mkdir -p "${HOME:-/home/steam}/.steam/sdk64"
 ln -sfT "${STEAMCMDDIR}/linux64/steamclient.so" "${HOME:-/home/steam}/.steam/sdk64/steamclient.so"
 
+# Pre-cache the curated Steam Workshop pool into the shared copy so every
+# instance overlays maps already on disk (instant !map switches). Boots a
+# vanilla server per id BEFORE mods are installed; best-effort (never fatal).
+# shellcheck source=/dev/null
+source /opt/cs2-hooks/prewarm-workshop.sh
+prewarm_workshop "${TARGET}/game"
+
 # Bake mods + gameinfo patch into the shared copy.
 /opt/cs2-hooks/install-mods.sh "${TARGET}/game/csgo"
 

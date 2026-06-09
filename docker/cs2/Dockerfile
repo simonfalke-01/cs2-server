@@ -59,7 +59,7 @@ RUN set -eux; \
 # Install our hooks, helpers and the wrapper entrypoint.
 # (Build context is the repo root so the plugins/ stage above can see sources.)
 COPY docker/cs2/pre.sh docker/cs2/post.sh docker/cs2/mods-entrypoint.sh \
-     docker/cs2/install-mods.sh docker/cs2/seed.sh /opt/cs2-hooks/
+     docker/cs2/install-mods.sh docker/cs2/seed.sh docker/cs2/prewarm-workshop.sh /opt/cs2-hooks/
 RUN chmod +x /opt/cs2-hooks/*.sh && chown -R steam:steam /opt/cs2-hooks
 
 # Bundled, pre-built plugins (synced into SwiftlyS2's plugins dir on boot).

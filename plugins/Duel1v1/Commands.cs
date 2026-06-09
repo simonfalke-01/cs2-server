@@ -127,8 +127,7 @@ public partial class Duel1v1
 
         var name = ctx.Args[0];
         Broadcast($"{p.Name} is changing the map to \x04{name}\x01…");
-        var cmd = MapPool.ChangeCommandFor(name);
-        Core.Scheduler.DelayBySeconds(2.0f, () => Server(cmd));
+        BeginMapChange(name);
     }
 
     private void CmdMaps(ICommandContext ctx)
@@ -143,6 +142,11 @@ public partial class Duel1v1
     private string _pendingMapVote = "";
     private ulong _pendingMapVoter;
 
+    // Pending map-change feedback state (drives the workshop download messages).
+    private ulong _pendingWorkshopId;
+    private string _pendingMapLabel = "";
+    private bool _downloadAnnounced;
+
     private void CmdVoteMap(ICommandContext ctx)
     {
         if (!FromPlayer(ctx, out var p)) return;
@@ -155,16 +159,38 @@ public partial class Duel1v1
         if (_pendingMapVote == name && _pendingMapVoter != p.SteamID)
         {
             Broadcast($"Both players voted \x04{name}\x01 — changing map…");
-            var cmd = MapPool.ChangeCommandFor(name);
             _pendingMapVote = "";
             _pendingMapVoter = 0;
-            Core.Scheduler.DelayBySeconds(2.0f, () => Server(cmd));
+            BeginMapChange(name);
             return;
         }
 
         _pendingMapVote = name;
         _pendingMapVoter = p.SteamID;
         Broadcast($"{p.Name} wants to play \x04{name}\x01 — other player type \x04!votemap {name}\x01 to confirm.");
+    }
+
+    /// <summary>
+    /// Issue a map change with on-screen feedback. For pool workshop maps we
+    /// record the workshop id + label so the UGC download events (handled in
+    /// Match.cs) can show downloading/complete/failed; pre-cached and stock maps
+    /// just switch. The 2s delay lets the announcement land before the
+    /// changelevel disconnects clients.
+    /// </summary>
+    private void BeginMapChange(string name)
+    {
+        var entry = MapPool.Resolve(name);
+        _pendingWorkshopId = entry?.WorkshopId ?? 0;
+        _pendingMapLabel = entry?.Display ?? name;
+        _downloadAnnounced = false;
+
+        var warn = _pendingWorkshopId != 0
+            ? $"Changing map to<br><b>{_pendingMapLabel}</b><br>Workshop maps can take up to a minute to download the first time…"
+            : $"Changing map to<br><b>{_pendingMapLabel}</b>";
+        Core.PlayerManager.SendCenterHTML(warn, 5000);
+
+        var cmd = MapPool.ChangeCommandFor(name);
+        Core.Scheduler.DelayBySeconds(2.0f, () => Server(cmd));
     }
 
     // --- match -----------------------------------------------------------
