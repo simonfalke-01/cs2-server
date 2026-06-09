@@ -46,17 +46,18 @@ func (s *Server) routes() {
 // --- request/response payloads -------------------------------------------
 
 type createRequest struct {
-	OwnerID    string `json:"owner_id"`
-	Name       string `json:"name"`
-	Map        string `json:"map"`
-	Mode       string `json:"mode"`
-	GameType   int    `json:"game_type"`
-	GameMode   int    `json:"game_mode"`
-	MaxPlayers int    `json:"max_players"`
-	Public     bool   `json:"public"`
-	GSLT       string `json:"gslt"`
-	Password   string `json:"password"`
-	BotQuota   int    `json:"bot_quota"`
+	OwnerID     string `json:"owner_id"`
+	Name        string `json:"name"`
+	Map         string `json:"map"`
+	WorkshopMap string `json:"workshop_map"`
+	Mode        string `json:"mode"`
+	GameType    int    `json:"game_type"`
+	GameMode    int    `json:"game_mode"`
+	MaxPlayers  int    `json:"max_players"`
+	Public      bool   `json:"public"`
+	GSLT        string `json:"gslt"`
+	Password    string `json:"password"`
+	BotQuota    int    `json:"bot_quota"`
 }
 
 type instanceView struct {
@@ -104,17 +105,18 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	inst, err := s.mgr.Create(r.Context(), orchestrator.CreateOptions{
-		OwnerID:    req.OwnerID,
-		Name:       req.Name,
-		Map:        req.Map,
-		Mode:       req.Mode,
-		GameType:   req.GameType,
-		GameMode:   req.GameMode,
-		MaxPlayers: req.MaxPlayers,
-		Public:     req.Public,
-		GSLT:       req.GSLT,
-		Password:   req.Password,
-		BotQuota:   req.BotQuota,
+		OwnerID:     req.OwnerID,
+		Name:        req.Name,
+		Map:         req.Map,
+		WorkshopMap: req.WorkshopMap,
+		Mode:        req.Mode,
+		GameType:    req.GameType,
+		GameMode:    req.GameMode,
+		MaxPlayers:  req.MaxPlayers,
+		Public:      req.Public,
+		GSLT:        req.GSLT,
+		Password:    req.Password,
+		BotQuota:    req.BotQuota,
 	})
 	if err != nil {
 		s.writeManagerError(w, err)

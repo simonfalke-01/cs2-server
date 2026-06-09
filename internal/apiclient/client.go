@@ -37,17 +37,18 @@ type InstanceView struct {
 
 // CreateRequest is the body for creating a server.
 type CreateRequest struct {
-	OwnerID    string `json:"owner_id"`
-	Name       string `json:"name"`
-	Map        string `json:"map"`
-	Mode       string `json:"mode"`
-	GameType   int    `json:"game_type"`
-	GameMode   int    `json:"game_mode"`
-	MaxPlayers int    `json:"max_players"`
-	Public     bool   `json:"public"`
-	GSLT       string `json:"gslt"`
-	Password   string `json:"password"`
-	BotQuota   int    `json:"bot_quota"`
+	OwnerID     string `json:"owner_id"`
+	Name        string `json:"name"`
+	Map         string `json:"map"`
+	WorkshopMap string `json:"workshop_map"`
+	Mode        string `json:"mode"`
+	GameType    int    `json:"game_type"`
+	GameMode    int    `json:"game_mode"`
+	MaxPlayers  int    `json:"max_players"`
+	Public      bool   `json:"public"`
+	GSLT        string `json:"gslt"`
+	Password    string `json:"password"`
+	BotQuota    int    `json:"bot_quota"`
 }
 
 // APIError represents a non-2xx response from the orchestrator.

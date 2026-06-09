@@ -63,10 +63,10 @@ var registry = map[string]Preset{
 		Name:        "1v1",
 		GameType:    0,
 		GameMode:    1,
-		MaxPlayers:  12,
+		MaxPlayers:  8, // 2 active duelers + up to 6 spectators
 		Cfg:         "1v1.cfg",
 		NoBots:      true,
-		Description: "Winner-stays 1v1 arena",
+		Description: "Two-player 1v1 duel",
 	},
 }
 

@@ -7,8 +7,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-    <AssemblyName>Arena1v1</AssemblyName>
-    <RootNamespace>Arena1v1</RootNamespace>
+    <AssemblyName>Duel1v1</AssemblyName>
+    <RootNamespace>Duel1v1</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>

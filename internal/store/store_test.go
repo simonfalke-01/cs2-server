@@ -22,20 +22,21 @@ func newTestStore(t *testing.T) *Store {
 
 func sampleInstance(id, owner string) *model.Instance {
 	return &model.Instance{
-		ID:         id,
-		BackendID:  "container-" + id,
-		OwnerID:    owner,
-		Name:       "test",
-		Map:        "de_inferno",
-		Mode:       "1v1",
-		Status:     model.StatusRunning,
-		Public:     true,
-		Host:       "1.2.3.4",
-		GamePort:   27015,
-		RCONPort:   27016,
-		RCONPass:   "secret",
-		MaxPlayers: 10,
-		CreatedAt:  time.Unix(1700000000, 0),
+		ID:          id,
+		BackendID:   "container-" + id,
+		OwnerID:     owner,
+		Name:        "test",
+		Map:         "de_inferno",
+		Mode:        "1v1",
+		WorkshopMap: "3070253702",
+		Status:      model.StatusRunning,
+		Public:      true,
+		Host:        "1.2.3.4",
+		GamePort:    27015,
+		RCONPort:    27016,
+		RCONPass:    "secret",
+		MaxPlayers:  10,
+		CreatedAt:   time.Unix(1700000000, 0),
 	}
 }
 
@@ -57,6 +58,9 @@ func TestPutGetRoundtrip(t *testing.T) {
 	}
 	if got.Mode != "1v1" {
 		t.Fatalf("mode not persisted: %q", got.Mode)
+	}
+	if got.WorkshopMap != "3070253702" {
+		t.Fatalf("workshop_map not persisted: %q", got.WorkshopMap)
 	}
 	if got.RCONPass != "secret" {
 		t.Fatalf("rcon pass not persisted")

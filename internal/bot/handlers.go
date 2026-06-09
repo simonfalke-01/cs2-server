@@ -19,14 +19,15 @@ func (b *Bot) handleCreate(ctx context.Context, s *discordgo.Session, i *discord
 
 	opts := optionMap(i)
 	req := apiclient.CreateRequest{
-		OwnerID:    userID(i),
-		Name:       opts.str("name", ""),
-		Map:        opts.str("map", ""),
-		Mode:       opts.str("mode", ""),
-		MaxPlayers: int(opts.intv("maxplayers", 0)),
-		BotQuota:   int(opts.intv("bots", 0)),
-		Public:     opts.boolv("public", false),
-		Password:   opts.str("password", ""),
+		OwnerID:     userID(i),
+		Name:        opts.str("name", ""),
+		Map:         opts.str("map", ""),
+		WorkshopMap: opts.str("workshop", ""),
+		Mode:        opts.str("mode", ""),
+		MaxPlayers:  int(opts.intv("maxplayers", 0)),
+		BotQuota:    int(opts.intv("bots", 0)),
+		Public:      opts.boolv("public", false),
+		Password:    opts.str("password", ""),
 	}
 
 	inst, err := b.api.Create(ctx, req)

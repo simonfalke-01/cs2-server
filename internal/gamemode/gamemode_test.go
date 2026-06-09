@@ -10,7 +10,7 @@ func TestLookupKnown(t *testing.T) {
 	if !ok {
 		t.Fatal("expected 1v1 preset to exist")
 	}
-	if p.Name != "1v1" || p.Cfg != "1v1.cfg" || p.MaxPlayers != 12 {
+	if p.Name != "1v1" || p.Cfg != "1v1.cfg" || p.MaxPlayers != 8 {
 		t.Fatalf("unexpected 1v1 preset: %+v", p)
 	}
 	if !p.NoBots {

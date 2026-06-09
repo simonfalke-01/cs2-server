@@ -38,6 +38,12 @@ func commandDefs() []*discordgo.ApplicationCommand {
 				},
 				{
 					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "workshop",
+					Description: "Steam Workshop map file id (overrides map)",
+					Required:    false,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
 					Name:        "mode",
 					Description: "Game mode preset",
 					Required:    false,

@@ -36,6 +36,9 @@ type CreateOptions struct {
 	Name string
 	// Map is the start map, e.g. "de_inferno".
 	Map string
+	// WorkshopMap is an optional Steam Workshop file id to host instead of a
+	// stock Map. When set, the server downloads and boots that workshop map.
+	WorkshopMap string
 	// Mode is a game-mode preset name (e.g. "competitive", "1v1"). When set it
 	// seeds GameType/GameMode/MaxPlayers and the in-game cfg bundle. Explicitly
 	// provided GameType/GameMode/MaxPlayers still take precedence.
@@ -59,20 +62,21 @@ type CreateOptions struct {
 
 // Instance is the observable state of a managed server.
 type Instance struct {
-	ID         string    `json:"id"`         // stable short id assigned by the control plane
-	BackendID  string    `json:"backend_id"` // backend handle (e.g. docker container id)
-	OwnerID    string    `json:"owner_id"`
-	Name       string    `json:"name"`
-	Map        string    `json:"map"`
-	Mode       string    `json:"mode"`
-	Status     Status    `json:"status"`
-	Public     bool      `json:"public"`
-	Host       string    `json:"host"`      // advertised connect host/IP
-	GamePort   int       `json:"game_port"` // UDP game port
-	RCONPort   int       `json:"rcon_port"` // TCP RCON port
-	RCONPass   string    `json:"-"`         // never serialized to clients
-	MaxPlayers int       `json:"max_players"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID          string    `json:"id"`         // stable short id assigned by the control plane
+	BackendID   string    `json:"backend_id"` // backend handle (e.g. docker container id)
+	OwnerID     string    `json:"owner_id"`
+	Name        string    `json:"name"`
+	Map         string    `json:"map"`
+	WorkshopMap string    `json:"workshop_map,omitempty"`
+	Mode        string    `json:"mode"`
+	Status      Status    `json:"status"`
+	Public      bool      `json:"public"`
+	Host        string    `json:"host"`      // advertised connect host/IP
+	GamePort    int       `json:"game_port"` // UDP game port
+	RCONPort    int       `json:"rcon_port"` // TCP RCON port
+	RCONPass    string    `json:"-"`         // never serialized to clients
+	MaxPlayers  int       `json:"max_players"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // ConnectString returns the in-game connect address, e.g. "1.2.3.4:27015".

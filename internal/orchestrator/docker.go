@@ -115,19 +115,20 @@ func (m *DockerManager) Create(ctx context.Context, opts CreateOptions) (*Instan
 	}
 
 	inst := &Instance{
-		ID:         id,
-		OwnerID:    opts.OwnerID,
-		Name:       opts.Name,
-		Map:        opts.Map,
-		Mode:       opts.Mode,
-		Status:     StatusStarting,
-		Public:     opts.Public,
-		Host:       m.cfg.PublicIP,
-		GamePort:   gamePort,
-		RCONPort:   rconPort,
-		RCONPass:   rconPass,
-		MaxPlayers: opts.MaxPlayers,
-		CreatedAt:  time.Now(),
+		ID:          id,
+		OwnerID:     opts.OwnerID,
+		Name:        opts.Name,
+		Map:         opts.Map,
+		WorkshopMap: opts.WorkshopMap,
+		Mode:        opts.Mode,
+		Status:      StatusStarting,
+		Public:      opts.Public,
+		Host:        m.cfg.PublicIP,
+		GamePort:    gamePort,
+		RCONPort:    rconPort,
+		RCONPass:    rconPass,
+		MaxPlayers:  opts.MaxPlayers,
+		CreatedAt:   time.Now(),
 	}
 
 	// Persist before starting so a crash mid-create is recoverable/cleanable.
@@ -202,6 +203,11 @@ func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts
 	}
 	if opts.BotQuota > 0 {
 		env = append(env, "CS2_BOT_QUOTA="+strconv.Itoa(opts.BotQuota))
+	}
+	if opts.WorkshopMap != "" {
+		// The base image boots a Steam Workshop map when this is set, taking
+		// precedence over CS2_STARTMAP.
+		env = append(env, "CS2_HOST_WORKSHOP_MAP="+opts.WorkshopMap)
 	}
 	if m.cfg.SharedGameFiles {
 		env = append(env,

@@ -41,7 +41,7 @@ flowchart TD
 docker/cs2/            Modded CS2 image (SwiftlyS2)
 docker/cs2/cfg/        Game-mode cfg bundles (competitive/wingman/deathmatch/1v1)
 plugins/SamplePlugin/  Sample SwiftlyS2 C# plugin
-plugins/Arena1v1/      Winner-stays 1v1 arena SwiftlyS2 plugin
+plugins/Duel1v1/       Two-player 1v1 duel SwiftlyS2 plugin
 cmd/orchestrator/      Orchestrator API service
 cmd/bot/               Discord bot
 internal/model/        Shared domain types (leaf package)
@@ -108,7 +108,7 @@ docker compose --profile bot up -d --build
 
 Then in Discord:
 
-- `/create map:de_dust2 mode:1v1 bots:4` → returns a `connect <ip>:<port>` string
+- `/create mode:1v1` → returns a `connect <ip>:<port>` string (1v1 ignores bots)
 - `/list` — your servers; **guild admins** list every server in the guild, or
   pass `mine:true` for only their own
 - `/status id:<id>`, `/restart id:<id>`, `/stop id:<id>` — users act on their
@@ -129,17 +129,36 @@ on every map load:
 | `competitive` | Standard 5v5 competitive | 10    | `competitive.cfg`|
 | `wingman`     | 2v2 Wingman              | 4     | `wingman.cfg`    |
 | `deathmatch`  | Free-for-all deathmatch  | 16    | `deathmatch.cfg` |
-| `1v1`         | Winner-stays 1v1 arena   | 12    | `1v1.cfg`        |
+| `1v1`         | Two-player 1v1 duel      | 8     | `1v1.cfg`        |
 
 Explicit `maxplayers`/`game_type`/`game_mode` on the request still override the
 preset's defaults. The orchestrator passes the chosen mode to the container as
 `CS2_MODE`; presets are defined in `internal/gamemode` (shared by the API, bot,
 and orchestrator) and the default is `CS2C_DEFAULT_MODE` (default `competitive`).
 
-**1v1 arena**: `mode:1v1` activates the `Arena1v1` SwiftlyS2 plugin
-(`plugins/Arena1v1`), which runs a winner-stays queue — two players duel each
-round, the survivor stays, and the next queued player rotates in. The plugin is
-inert on every other mode (gated on `CS2_MODE`), so one image serves all modes.
+### 1v1 duel mode
+
+`mode:1v1` activates the `Duel1v1` SwiftlyS2 plugin (`plugins/Duel1v1`) — a
+strict **two-player duel** configured entirely from in-server chat. The plugin
+is inert on every other mode (gated on `CS2_MODE`), so one image serves all
+modes. Flow:
+
+- Infinite **warmup** with free practice; the first two humans to connect are
+  the players (extra humans spectate). Both type `!ready` to start.
+- **MR match** (default MR12 = first to 13, one halftime side-swap), with MR3
+  overtime on a tie. Rounds end on a kill (no round timer); sides do **not**
+  swap every round.
+- **Buying is disabled.** Players pick weapons via chat (`!ak`, `!awp`,
+  `!deagle`, … — `!guns` lists all), defaulting to AK + Deagle; picks apply
+  immediately. `!nades` / `!armor` are warmup-only server toggles.
+- Disconnect aborts to warmup; `!rematch` replays. See `plugins/Duel1v1` for the
+  full command list.
+
+**Maps**: `/create map:` works as usual; for Steam Workshop maps pass
+`/create workshop:<file-id>` (or the API `workshop_map` field), which the base
+image downloads and boots. In a 1v1 server, `!maps` / `!map <name>` /
+`!votemap <name>` switch maps during warmup (curated pool in
+`plugins/Duel1v1/MapPool.cs`).
 
 ## Deploying on a Linux VPS
 

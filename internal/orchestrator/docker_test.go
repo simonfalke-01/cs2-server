@@ -24,8 +24,8 @@ func TestApplyDefaults_PresetSeedsTypeModeAndSlots(t *testing.T) {
 	if opts.GameType != 0 || opts.GameMode != 1 {
 		t.Fatalf("type/mode = %d/%d, want 0/1", opts.GameType, opts.GameMode)
 	}
-	if opts.MaxPlayers != 12 {
-		t.Fatalf("maxplayers = %d, want 12 (1v1 preset)", opts.MaxPlayers)
+	if opts.MaxPlayers != 8 {
+		t.Fatalf("maxplayers = %d, want 8 (1v1 preset)", opts.MaxPlayers)
 	}
 }
 

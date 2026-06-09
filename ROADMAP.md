@@ -82,10 +82,11 @@ High-value gaps in what already exists.
 
 ## Phase C — Gameplay & server features
 
-- [ ] **Steam Workshop maps/collections.** Base image supports
-  `CS2_HOST_WORKSHOP_MAP/COLLECTION`; expose via API + `/create` option and a
-  `/map` command (uses `ds_workshop_changelevel`). _Touches: `model`,
-  `orchestrator`, `api`, `bot`._
+- 🔶 **Steam Workshop maps/collections.** Single Workshop map is wired:
+  `/create workshop:<id>` (API `workshop_map`) sets `CS2_HOST_WORKSHOP_MAP`, and
+  the 1v1 plugin changes maps in-game via `ds_workshop_changelevel`. _Still TODO:
+  collection (`CS2_HOST_WORKSHOP_COLLECTION`) support + a general `/map` command
+  for non-1v1 servers._
 - [ ] **SourceTV / demo recording.** Wire `TV_ENABLE/TV_PORT/TV_AUTORECORD`
   through the orchestrator and allocate the extra UDP port; optional demo upload
   in `post.sh`.
@@ -93,8 +94,10 @@ High-value gaps in what already exists.
   single `/create mode:` choice mapping to `game_type`/`game_mode`/cfg bundles.
   Presets live in `internal/gamemode` (shared by api/bot/orchestrator); cfg
   bundles in `docker/cs2/cfg/`; default via `CS2C_DEFAULT_MODE`. The `1v1` mode
-  ships a winner-stays arena SwiftlyS2 plugin (`plugins/Arena1v1`, gated on
-  `CS2_MODE`). _Extend with retake/surf presets + more arena tuning as needed._
+  ships a two-player duel SwiftlyS2 plugin (`plugins/Duel1v1`, gated on
+  `CS2_MODE`): warmup/!ready, MR scoring + halftime swap + overtime, per-player
+  chat weapon picks, buying disabled, in-game map controls. _Extend with
+  retake/surf presets as needed._
 - [ ] **Plugin management.** Per-server plugin selection, upload/registry of
   SwiftlyS2 plugins, and hot-reload, instead of the single bundled set.
 - [ ] **Live config tuning** over RCON (change map, kick, exec cfg) from Discord.
