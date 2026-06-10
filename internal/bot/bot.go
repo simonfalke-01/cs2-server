@@ -59,7 +59,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	if err := b.session.Open(); err != nil {
 		return fmt.Errorf("bot: open: %w", err)
 	}
-	defer b.session.Close()
+	defer func() { _ = b.session.Close() }()
 
 	// Resolve the application ID for command registration. session.State.User
 	// is populated from the gateway READY event, which can briefly lag after

@@ -35,7 +35,10 @@ func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	client := apiclient.New(cfg.OrchestratorURL)
+	// CS2C_API_TOKEN authenticates the bot to the orchestrator API. It is
+	// optional: when unset, no Authorization header is sent and the orchestrator
+	// must likewise be running without a token.
+	client := apiclient.New(cfg.OrchestratorURL, os.Getenv("CS2C_API_TOKEN"))
 
 	b, err := bot.New(bot.Config{
 		Token:       cfg.DiscordToken,

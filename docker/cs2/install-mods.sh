@@ -23,6 +23,10 @@ GAMEINFO="${CSGO_DIR}/gameinfo.gi"
 
 if [[ ! -d "${CSGO_DIR}" ]]; then
     echo "[mods] ERROR: ${CSGO_DIR} not found; game files missing?" >&2
+    # Works whether this script is sourced (return) or executed (exit). The
+    # `exit 1` only looks unreachable to shellcheck because `return` outside a
+    # function/sourced context is a runtime decision.
+    # shellcheck disable=SC2317
     return 1 2>/dev/null || exit 1
 fi
 

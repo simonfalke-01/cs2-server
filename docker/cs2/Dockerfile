@@ -26,6 +26,11 @@ RUN set -eux; \
     done
 
 # --- Stage 2: the CS2 dedicated server image -------------------------------
+# The community CS2 base image is not semver-tagged; it only publishes a rolling
+# `:latest` that tracks the current CS2 dedicated-server build. There is no
+# stable version tag to pin to, and pinning a digest would freeze the game build
+# (and break new players who are on the latest client). Track :latest by design.
+# hadolint ignore=DL3007
 FROM joedwards32/cs2:latest
 
 USER root
@@ -35,6 +40,12 @@ ENV HOMEDIR="/home/steam"
 # fuse-overlayfs is used in shared-game-files mode on rootless/userns Docker,
 # where kernel OverlayFS mounts are not permitted. SwiftlyS2 ships its own .NET
 # runtime (the "-with-runtimes" release), so no system .NET is required.
+#
+# Versions are intentionally unpinned: the base image is a rolling Debian release
+# (see DL3007 above) whose apt suite advances over time, so pinning exact package
+# versions here would break `apt-get install` on the next base rebuild. These are
+# stable, low-churn utility packages.
+# hadolint ignore=DL3008
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl unzip libicu-dev fuse-overlayfs \
     && apt-get clean \
@@ -46,15 +57,16 @@ ARG SWIFTLY_FILE="swiftlys2-linux-v1.3.5-with-runtimes.zip"
 
 # Stage SwiftlyS2 under /opt/cs2-mods/addons so pre.sh can copy it into the
 # runtime-downloaded csgo/ tree.
+WORKDIR /tmp/mods
 RUN set -eux; \
-    mkdir -p /opt/cs2-mods /tmp/mods; \
-    cd /tmp/mods; \
+    mkdir -p /opt/cs2-mods; \
     curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
         "https://github.com/swiftly-solution/swiftlys2/releases/download/${SWIFTLY_VERSION}/${SWIFTLY_FILE}" -o sw.zip; \
     unzip -oq sw.zip; \
     cp -a swiftlys2-*/addons /opt/cs2-mods/; \
-    cd /; rm -rf /tmp/mods; \
+    rm -rf /tmp/mods; \
     chown -R steam:steam /opt/cs2-mods
+WORKDIR /
 
 # Install our hooks, helpers and the wrapper entrypoint.
 # (Build context is the repo root so the plugins/ stage above can see sources.)

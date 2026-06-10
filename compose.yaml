@@ -3,7 +3,7 @@
 #   docker compose up -d --build
 #
 # builds the control plane (orchestrator + optional Discord bot) and the CS2
-# game image (with Metamod + CounterStrikeSharp + the bundled sample plugin),
+# game image (with SwiftlyS2 + the bundled sample plugin),
 # then starts the orchestrator. The orchestrator launches CS2 game-server
 # containers on demand via the Docker socket, attaching them to the shared
 # `cs2net` network so it can reach their RCON by container name.
@@ -55,9 +55,15 @@ services:
       CS2C_DEFAULT_GSLT: "${CS2C_DEFAULT_GSLT:-}"
       CS2C_IDLE_SHUTDOWN_MINUTES: "${CS2C_IDLE_SHUTDOWN_MINUTES:-30}"
       CS2C_MAX_SERVERS_PER_USER: "${CS2C_MAX_SERVERS_PER_USER:-2}"
+      # Bearer token gating the orchestrator API. Empty => unauthenticated (startup
+      # warning). Set it (same value as the bot below) to require auth.
+      CS2C_API_TOKEN: "${CS2C_API_TOKEN:-}"
       CS2C_STATE_PATH: "/state/cs2-server.db"
     ports:
-      - "${CS2C_API_PORT:-18080}:8080"
+      # Bind host-local only: the bot reaches the orchestrator over the internal
+      # cs2net (http://orchestrator:8080), so the API never needs to be exposed
+      # on all host interfaces. Keep a loopback publish for local debugging.
+      - "127.0.0.1:${CS2C_API_PORT:-18080}:8080"
     volumes:
       # Docker socket. Defaults to the standard path; on rootless Docker set
       # DOCKER_SOCK=/run/user/$UID/docker.sock in .env.
@@ -81,6 +87,8 @@ services:
       DISCORD_APP_ID: "${DISCORD_APP_ID:-}"
       DISCORD_GUILD_ID: "${DISCORD_GUILD_ID:-}"
       CS2C_ORCHESTRATOR_URL: "http://orchestrator:8080"
+      # Must match the orchestrator's CS2C_API_TOKEN above so the bot can authenticate.
+      CS2C_API_TOKEN: "${CS2C_API_TOKEN:-}"
     networks:
       - cs2net
 

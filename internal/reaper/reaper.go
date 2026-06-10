@@ -12,6 +12,12 @@ import (
 	"github.com/brandonli/cs2-server/internal/orchestrator"
 )
 
+// startupGrace is how long after creation an instance is exempt from reaping.
+// Fresh servers spend several minutes downloading/booting/loading a map before
+// RCON answers and players can connect; reaping inside this window would
+// destroy servers that simply have not finished starting.
+const startupGrace = 5 * time.Minute
+
 // Reaper periodically polls live status and stops servers idle too long.
 type Reaper struct {
 	mgr      orchestrator.ServerManager
@@ -65,9 +71,19 @@ func (r *Reaper) tick(ctx context.Context) {
 	for _, in := range instances {
 		live[in.ID] = true
 
+		// Startup grace: never reap an instance still inside its boot window.
+		// Reset any stale tracking so the idle clock starts fresh afterwards.
+		if !in.CreatedAt.IsZero() && time.Since(in.CreatedAt) < startupGrace {
+			r.clear(in.ID)
+			continue
+		}
+
 		st, err := r.mgr.Status(ctx, in.ID)
-		if err != nil || !st.Online {
-			// Can't determine; don't accumulate idle time.
+		if err != nil || !st.Online || !st.OccupancyKnown {
+			// Offline, unreachable, or occupancy unknown (RCON errored): we
+			// cannot prove the server is empty, so don't accumulate idle time
+			// and clear any tracking. A healthy server with wedged RCON must
+			// not be reaped just because we failed to read its player count.
 			r.clear(in.ID)
 			continue
 		}

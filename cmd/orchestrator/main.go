@@ -42,7 +42,11 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	defer func() {
+		if cerr := st.Close(); cerr != nil {
+			log.Error("store close", "err", cerr)
+		}
+	}()
 
 	mgr, err := orchestrator.NewDockerManager(ctx, orchestrator.DockerConfig{
 		Image:             cfg.CS2Image,
@@ -56,21 +60,35 @@ func run(log *slog.Logger) error {
 		SharedGameFiles:   cfg.SharedGameFiles,
 		SharedVolume:      cfg.SharedVolume,
 		Network:           cfg.Network,
+		MaxPerOwner:       cfg.MaxServersPerUser, // authoritative atomic per-owner cap (H4)
 	}, st)
 	if err != nil {
 		return err
 	}
-	defer mgr.Close()
+	defer func() {
+		if cerr := mgr.Close(); cerr != nil {
+			log.Error("manager close", "err", cerr)
+		}
+	}()
 
 	// Background idle reaper.
 	rp := reaper.New(mgr, log, time.Duration(cfg.IdleShutdownMinutes)*time.Minute)
 	go rp.Run(ctx)
 
-	apiSrv := api.New(mgr, log, cfg.MaxServersPerUser)
+	if cfg.APIToken == "" {
+		log.Warn("SECURITY: CS2C_API_TOKEN is not set — the orchestrator API is UNAUTHENTICATED; " +
+			"anyone who can reach the listener can control every server. Set CS2C_API_TOKEN to enable bearer auth.")
+	}
+
+	apiSrv := api.New(mgr, log, cfg.MaxServersPerUser, cfg.APIToken)
 	httpSrv := &http.Server{
 		Addr:              cfg.APIAddr,
 		Handler:           apiSrv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	go func() {

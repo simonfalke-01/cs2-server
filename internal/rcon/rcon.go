@@ -13,21 +13,26 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync/atomic"
 	"time"
 )
 
 // Packet types per the Source RCON protocol.
 const (
-	typeResponseValue = 0
-	typeExecCommand   = 2
-	typeAuthResponse  = 2
-	typeAuth          = 3
+	typeExecCommand  = 2
+	typeAuthResponse = 2
+	typeAuth         = 3
 )
 
 const (
 	maxPacketSize = 4096
 	headerSize    = 10 // size of (id + type + 2 null terminators) once length is read
+	// drainWindow bounds how long Exec waits for additional response packets
+	// after the first one arrives. Source RCON splits responses larger than
+	// ~4KB across multiple RESPONSE_VALUE packets with no built-in count, so we
+	// keep reading until no further packet arrives within this short window.
+	drainWindow = 250 * time.Millisecond
 )
 
 // ErrAuthFailed indicates the RCON password was rejected.
@@ -86,16 +91,46 @@ func (c *Client) authenticate(password string) error {
 }
 
 // Exec runs a console command and returns the server's text response.
+//
+// Source RCON has no per-response packet count: a large reply (e.g. "status"
+// on a populated server, which can exceed 4KB) is split across several
+// RESPONSE_VALUE packets. Reading a single packet would truncate that output
+// and, downstream, feed the idle reaper a false-empty player count. We instead
+// block for the first response packet, then keep draining additional packets
+// until none arrives within a short window.
 func (c *Client) Exec(cmd string) (string, error) {
 	id := c.id()
 	if err := c.write(id, typeExecCommand, cmd); err != nil {
 		return "", err
 	}
+
+	// First packet: honour the connection-wide deadline set at Dial time.
 	_, _, body, err := c.read()
 	if err != nil {
 		return "", fmt.Errorf("rcon: exec read: %w", err)
 	}
-	return body, nil
+
+	var sb strings.Builder
+	sb.WriteString(body)
+
+	// Drain any continuation packets. Each iteration waits at most drainWindow
+	// for more data; a read timeout means the response is complete.
+	for {
+		_ = c.conn.SetReadDeadline(time.Now().Add(drainWindow))
+		_, _, more, derr := c.read()
+		if derr != nil {
+			var nerr net.Error
+			if errors.As(derr, &nerr) && nerr.Timeout() {
+				break // no further packets within the window: response complete
+			}
+			if errors.Is(derr, io.EOF) {
+				break
+			}
+			return "", fmt.Errorf("rcon: exec drain: %w", derr)
+		}
+		sb.WriteString(more)
+	}
+	return sb.String(), nil
 }
 
 func (c *Client) id() int32 {
@@ -157,6 +192,6 @@ func Run(ctx context.Context, addr, password, cmd string, timeout time.Duration)
 	if err != nil {
 		return "", err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	return c.Exec(cmd)
 }

@@ -86,10 +86,16 @@ func (i Instance) ConnectString() string {
 
 // LiveStatus is real-time data pulled from a running server via RCON.
 type LiveStatus struct {
-	Online      bool   `json:"online"`
-	Map         string `json:"map"`
-	PlayerCount int    `json:"player_count"`
-	HumanCount  int    `json:"human_count"`
-	MaxPlayers  int    `json:"max_players"`
-	Raw         string `json:"raw,omitempty"`
+	Online bool `json:"online"`
+	// OccupancyKnown is true only when PlayerCount/HumanCount were populated from
+	// a successful RCON status read. When false the occupancy counts are unknown
+	// (RCON unreachable/errored) and consumers must NOT treat HumanCount==0 as
+	// "empty" — e.g. the idle reaper skips such instances rather than reaping a
+	// healthy-but-unreachable server.
+	OccupancyKnown bool   `json:"occupancy_known"`
+	Map            string `json:"map"`
+	PlayerCount    int    `json:"player_count"`
+	HumanCount     int    `json:"human_count"`
+	MaxPlayers     int    `json:"max_players"`
+	Raw            string `json:"raw,omitempty"`
 }

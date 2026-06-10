@@ -25,6 +25,7 @@ public partial class Duel1v1
     // Scores keyed by SteamID.
     private int _score1, _score2;
     private int _roundsPlayed;
+    private bool _roundDecided;        // a death already scored this round (1v1: only the FIRST death counts)
     private bool _sidesSwapped;       // halftime swap applied?
     private int _otNumber;            // 0 = regulation, 1+ = overtime period
     private bool _pendingSwapRespawn; // force a clean respawn at the next live round start after a side swap
@@ -45,6 +46,7 @@ public partial class Duel1v1
         _rematch.Clear();
         _score1 = _score2 = 0;
         _roundsPlayed = 0;
+        _roundDecided = false;
         _sidesSwapped = false;
         _pendingSwapRespawn = false;
         _otNumber = 0;
@@ -68,6 +70,7 @@ public partial class Duel1v1
         _phase = Phase.Live;
         _score1 = _score2 = 0;
         _roundsPlayed = 0;
+        _roundDecided = false;
         _sidesSwapped = false;
         _pendingSwapRespawn = false;
         _otNumber = 0;
@@ -138,7 +141,9 @@ public partial class Duel1v1
 
     private void EnsureTeam(IPlayer p, Team team)
     {
-        if (p.Controller.Team != team)
+        var c = p.Controller;
+        if (c == null) return;
+        if (c.Team != team)
             p.SwitchTeam(team);
     }
 
@@ -225,6 +230,13 @@ public partial class Duel1v1
         if (_phase != Phase.Live) return HookResult.Continue;
         if (!IsPlayer(victim.SteamID)) return HookResult.Continue;
 
+        // In 1v1 both pawns can die in one round (mutual HE/molotov, simultaneous
+        // trade). Only the FIRST death decides the round; later deaths this round
+        // must not score or advance _roundsPlayed (which would corrupt first-to-N,
+        // the halftime trigger, and OT parity). Cleared in OnRoundStart.
+        if (_roundDecided) return HookResult.Continue;
+        _roundDecided = true;
+
         // Round decided: the OTHER player scores (suicide also awards opponent).
         ulong winner = victim.SteamID == _p1 ? _p2 : _p1;
         AddPoint(winner);
@@ -241,6 +253,9 @@ public partial class Duel1v1
     {
         if (!_active) return HookResult.Continue;
         if (_phase != Phase.Live) return HookResult.Continue;
+
+        // New round: arm the round-decided latch again so the next death scores.
+        _roundDecided = false;
 
         // Keep players pinned to the right side in case CS shuffled them, and keep
         // money at 0 (the engine re-grants start money on the round reset).

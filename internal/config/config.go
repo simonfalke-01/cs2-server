@@ -18,6 +18,12 @@ type Config struct {
 	APIAddr   string // listen address for the orchestrator HTTP API, e.g. ":8080"
 	StatePath string // path to the SQLite state file
 
+	// APIToken is the shared bearer token guarding the orchestrator API. When
+	// empty, auth is disabled (and the orchestrator logs a startup security
+	// warning); when set, every /v1/* request must present it. The bot's
+	// apiclient sends the same value via CS2C_API_TOKEN.
+	APIToken string // CS2C_API_TOKEN
+
 	// CS2 game image + container settings
 	CS2Image string // docker image used for game servers
 
@@ -62,6 +68,7 @@ func Load() (*Config, error) {
 	c := &Config{
 		APIAddr:         getEnv("CS2C_API_ADDR", ":8080"),
 		StatePath:       getEnv("CS2C_STATE_PATH", "data/cs2-server.db"),
+		APIToken:        getEnv("CS2C_API_TOKEN", ""),
 		CS2Image:        getEnv("CS2C_IMAGE", "cs2-server/cs2:latest"),
 		Network:         getEnv("CS2C_NETWORK", ""),
 		SharedVolume:    getEnv("CS2C_SHARED_VOLUME", "cs2-shared"),

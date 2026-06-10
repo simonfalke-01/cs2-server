@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"os"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
@@ -54,6 +54,13 @@ type DockerConfig struct {
 	// SharedVolume is the named Docker volume holding the seeded shared game
 	// copy, mounted at /shared in shared-files mode.
 	SharedVolume string
+
+	// MaxPerOwner caps how many concurrent instances a single owner may hold.
+	// When > 0 it is enforced atomically inside Create (H4); 0 disables the cap.
+	// NOTE: main.go must wire this from cfg.MaxServersPerUser for the cap to take
+	// effect; until then the manager-side enforcement is dormant and the API
+	// pre-check remains the only (advisory, racy) guard.
+	MaxPerOwner int
 }
 
 // DockerManager implements ServerManager on top of the local Docker engine.
@@ -62,8 +69,19 @@ type DockerManager struct {
 	store *store.Store
 	ports *ports.Allocator
 	cfg   DockerConfig
+	log   *slog.Logger
 
 	seedMu sync.Mutex // serializes the one-off shared-game-files seeding
+
+	// createMu serializes the count-then-insert in Create so the per-owner cap
+	// (H4) is enforced atomically against concurrent requests.
+	createMu sync.Mutex
+
+	// ctx is the manager-lifetime context threaded into background provisioning
+	// so Close() can cancel in-flight work; wg tracks those goroutines (H9).
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 var _ ServerManager = (*DockerManager)(nil)
@@ -86,15 +104,113 @@ func NewDockerManager(ctx context.Context, cfg DockerConfig, st *store.Store) (*
 		alloc.Reserve(in.RCONPort)
 	}
 
-	return &DockerManager{cli: cli, store: st, ports: alloc, cfg: cfg}, nil
+	mgrCtx, cancel := context.WithCancel(context.Background())
+	m := &DockerManager{
+		cli:    cli,
+		store:  st,
+		ports:  alloc,
+		cfg:    cfg,
+		log:    slog.Default(),
+		ctx:    mgrCtx,
+		cancel: cancel,
+	}
+
+	// Reconcile against the live Docker state on startup: stop containers we
+	// manage that have no store record (orphans from a crash mid-create), and
+	// prune store rows whose container has vanished (H8).
+	if err := m.reconcile(ctx, existing); err != nil {
+		m.log.Warn("orchestrator manager: startup reconcile failed", "err", err)
+	}
+
+	return m, nil
 }
 
-// Close releases the Docker client.
-func (m *DockerManager) Close() error { return m.cli.Close() }
+// reconcile aligns Docker reality with the store on startup. It stops/removes
+// managed containers that are not backed by a store record, and deletes store
+// rows whose backend container no longer exists (releasing their ports). It is
+// best-effort: individual failures are logged, not fatal.
+func (m *DockerManager) reconcile(ctx context.Context, recorded []*Instance) error {
+	known := make(map[string]struct{}, len(recorded))
+	for _, in := range recorded {
+		if in.BackendID != "" {
+			known[in.BackendID] = struct{}{}
+		}
+	}
+
+	// 1) Stop containers we manage that the store doesn't know about.
+	managed, err := m.ListManagedContainers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, cid := range managed {
+		if _, ok := known[cid]; ok {
+			continue
+		}
+		m.log.Warn("orchestrator manager: stopping unrecorded managed container", "container", cid)
+		if rerr := m.cli.ContainerRemove(ctx, cid, container.RemoveOptions{Force: true}); rerr != nil && !client.IsErrNotFound(rerr) {
+			m.log.Warn("orchestrator manager: reconcile remove failed", "container", cid, "err", rerr)
+		}
+	}
+
+	// 2) Prune store rows whose backend container has vanished.
+	for _, in := range recorded {
+		if in.BackendID == "" {
+			continue
+		}
+		if _, ierr := m.cli.ContainerInspect(ctx, in.BackendID); ierr != nil {
+			if !client.IsErrNotFound(ierr) {
+				m.log.Warn("orchestrator manager: reconcile inspect failed", "id", in.ID, "err", ierr)
+				continue
+			}
+			m.log.Warn("orchestrator manager: pruning record for vanished container", "id", in.ID)
+			m.releasePorts(in)
+			_ = m.cli.VolumeRemove(ctx, "cs2-data-"+in.ID, true)
+			if derr := m.store.Delete(ctx, in.ID); derr != nil {
+				m.log.Warn("orchestrator manager: reconcile delete failed", "id", in.ID, "err", derr)
+			}
+		}
+	}
+	return nil
+}
+
+// Close cancels in-flight provisioning, drains the goroutines with a deadline,
+// then releases the Docker client.
+func (m *DockerManager) Close() error {
+	if m.cancel != nil {
+		m.cancel()
+	}
+	// Drain provision goroutines, but don't block shutdown forever.
+	done := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		m.log.Warn("orchestrator manager: close timed out draining provisioners")
+	}
+	return m.cli.Close()
+}
 
 // Create provisions and starts a new CS2 server container.
 func (m *DockerManager) Create(ctx context.Context, opts CreateOptions) (*Instance, error) {
 	m.applyDefaults(&opts)
+
+	// Enforce the per-owner cap atomically: hold createMu across the count and
+	// the store insert so N concurrent requests for one owner can't all observe
+	// a stale count and overshoot the quota (H4). The API pre-check is advisory.
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+	if m.cfg.MaxPerOwner > 0 {
+		n, err := m.store.CountByOwner(ctx, opts.OwnerID)
+		if err != nil {
+			return nil, err
+		}
+		if n >= m.cfg.MaxPerOwner {
+			return nil, ErrLimitExceeded
+		}
+	}
 
 	gamePort, err := m.ports.Acquire()
 	if err != nil {
@@ -139,35 +255,47 @@ func (m *DockerManager) Create(ctx context.Context, opts CreateOptions) (*Instan
 
 	// Provisioning can be very slow (first-time game-files seeding downloads
 	// ~40GB; even a warm start runs SteamCMD + loads CS2). Do it in the
-	// background with a detached context so the API responds immediately and a
-	// client disconnect never cancels provisioning. The instance is returned in
-	// the "starting" state; clients poll status to learn when it's running.
-	go m.provision(opts, inst, gslt)
+	// background under the manager-lifetime context so the API responds
+	// immediately and a client disconnect never cancels provisioning, while
+	// Close() can still drain/cancel it on shutdown (H9). The instance is
+	// returned in the "starting" state; clients poll status to learn when it's
+	// running.
+	//
+	// Return a snapshot, not inst: provision() mutates inst concurrently, so the
+	// caller (and its JSON encoder) must not share the same pointer (H2).
+	snapshot := *inst
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.provision(m.ctx, opts, inst, gslt)
+	}()
 
-	return inst, nil
+	return &snapshot, nil
 }
 
-// provision performs the slow container bring-up off the request path.
-func (m *DockerManager) provision(opts CreateOptions, inst *Instance, gslt string) {
-	ctx := context.Background()
+// provision performs the slow container bring-up off the request path. It runs
+// under the manager-lifetime ctx so shutdown can cancel it.
+func (m *DockerManager) provision(ctx context.Context, opts CreateOptions, inst *Instance, gslt string) {
 	containerID, err := m.startContainer(ctx, inst, opts, gslt)
 	if err != nil {
-		m.log("provision failed", "id", inst.ID, "err", err)
-		inst.Status = StatusError
-		_ = m.store.Put(ctx, inst)
+		m.log.Error("orchestrator manager: provision failed", "id", inst.ID, "err", err)
+		// Roll back the half-provisioned instance with the same cleanup Stop
+		// does so we don't leak ports, the per-instance volume, or a zombie row
+		// that keeps consuming the owner's quota (H8). Use a detached context so
+		// cleanup still runs even if ctx was cancelled by shutdown.
+		cleanupCtx := context.Background()
+		_ = m.cli.VolumeRemove(cleanupCtx, "cs2-data-"+inst.ID, true)
+		m.releasePorts(inst)
+		if derr := m.store.Delete(cleanupCtx, inst.ID); derr != nil {
+			m.log.Error("orchestrator manager: provision cleanup delete failed", "id", inst.ID, "err", derr)
+		}
 		return
 	}
 	inst.BackendID = containerID
 	inst.Status = StatusRunning
 	if err := m.store.Put(ctx, inst); err != nil {
-		m.log("provision persist failed", "id", inst.ID, "err", err)
+		m.log.Error("orchestrator manager: provision persist failed", "id", inst.ID, "err", err)
 	}
-}
-
-// log is a tiny stderr logger so the orchestrator records background failures
-// without pulling a logger dependency into the manager.
-func (m *DockerManager) log(msg string, kv ...any) {
-	fmt.Fprintf(os.Stderr, "orchestrator manager: %s %v\n", msg, kv)
 }
 
 func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts CreateOptions, gslt string) (string, error) {
@@ -225,11 +353,14 @@ func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts
 	tcpGame := nat.Port(gamePortStr + "/tcp")
 	tcpRCON := nat.Port(rconPortStr + "/tcp")
 
+	// RCON is exposed on the container (so the orchestrator can reach it by
+	// container name over cs2net) but deliberately NOT published to a host port:
+	// RCON is a plaintext remote-command channel, and Status/Restart dial it by
+	// container name on cs2net, never via the host (H5).
 	exposed := nat.PortSet{udpGame: {}, tcpGame: {}, tcpRCON: {}}
 	bindings := nat.PortMap{
 		udpGame: []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: gamePortStr}},
 		tcpGame: []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: gamePortStr}},
-		tcpRCON: []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: rconPortStr}},
 	}
 
 	// Per-instance writable data lives in its own Docker-managed named volume,
@@ -275,6 +406,15 @@ func (m *DockerManager) startContainer(ctx context.Context, inst *Instance, opts
 		RestartPolicy: container.RestartPolicy{
 			Name: container.RestartPolicyUnlessStopped,
 		},
+		// Drop all Linux capabilities by default; CS2 + the simpleproxy RCON
+		// shim need none of them. Shared-game-files mode adds SYS_ADMIN back
+		// below for the overlay/fuse mount (H7).
+		//
+		// We deliberately do NOT set no-new-privileges here: the entrypoint runs
+		// as root and uses `su steam` to drop privileges, which the
+		// no-new-privileges flag would break. Removing the remaining SYS_ADMIN
+		// requirement entirely (rootless/userns) is a documented deferred item.
+		CapDrop: []string{"ALL"},
 	}
 	if m.cfg.SharedGameFiles {
 		// Mounting the overlay inside the container requires CAP_SYS_ADMIN, and
@@ -327,7 +467,7 @@ func (m *DockerManager) ensureImage(ctx context.Context) error {
 	if perr != nil {
 		return fmt.Errorf("docker: image %q not found locally and pull failed: %w", m.cfg.Image, perr)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	// Drain the pull progress stream.
 	buf := make([]byte, 4096)
 	for {
@@ -390,15 +530,23 @@ func (m *DockerManager) ensureSeeded(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("docker: create seeder: %w", err)
 	}
-	defer m.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+	defer func() {
+		_ = m.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+	}()
 
 	if err := m.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("docker: start seeder: %w", err)
 	}
 
-	// Wait for the seeder to complete (this is the long download).
-	statusCh, errCh := m.cli.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
+	// Wait for the seeder to complete (this is the long ~40GB download). Bound
+	// it so a wedged seeder can't hold seedMu forever and block every Create,
+	// and abort promptly on manager shutdown (H9).
+	waitCtx, cancel := context.WithTimeout(ctx, 60*time.Minute)
+	defer cancel()
+	statusCh, errCh := m.cli.ContainerWait(waitCtx, created.ID, container.WaitConditionNotRunning)
 	select {
+	case <-m.ctx.Done():
+		return fmt.Errorf("docker: seeder wait cancelled: %w", m.ctx.Err())
 	case werr := <-errCh:
 		if werr != nil {
 			return fmt.Errorf("docker: wait seeder: %w", werr)
@@ -431,7 +579,9 @@ func (m *DockerManager) isSeeded(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer m.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+	defer func() {
+		_ = m.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+	}()
 
 	if err := m.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
 		return false, err
@@ -528,6 +678,10 @@ func (m *DockerManager) Status(ctx context.Context, id string) (*LiveStatus, err
 
 	parsed := rcon.ParseStatus(raw)
 	ls.Online = true
+	// Occupancy is only trustworthy once we've actually parsed a status reply.
+	// The reaper keys destructive idle decisions on this so a wedged/unreachable
+	// RCON (handled above) is never mistaken for an empty server (CT1).
+	ls.OccupancyKnown = true
 	ls.Raw = raw
 	if parsed.Map != "" {
 		ls.Map = parsed.Map

@@ -3,6 +3,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -19,12 +20,15 @@ type Server struct {
 	mgr    orchestrator.ServerManager
 	log    *slog.Logger
 	mux    *http.ServeMux
-	maxPer int // per-owner instance cap (0 = unlimited)
+	maxPer int    // per-owner instance cap (0 = unlimited)
+	token  string // shared bearer token for /v1/* (empty disables auth)
 }
 
 // New builds an API server. maxPerOwner caps instances per owner (0 disables).
-func New(mgr orchestrator.ServerManager, log *slog.Logger, maxPerOwner int) *Server {
-	s := &Server{mgr: mgr, log: log, mux: http.NewServeMux(), maxPer: maxPerOwner}
+// token is the shared bearer required on /v1/* routes; when empty, auth is
+// disabled (the orchestrator logs a startup security warning).
+func New(mgr orchestrator.ServerManager, log *slog.Logger, maxPerOwner int, token string) *Server {
+	s := &Server{mgr: mgr, log: log, mux: http.NewServeMux(), maxPer: maxPerOwner, token: token}
 	s.routes()
 	return s
 }
@@ -33,14 +37,35 @@ func New(mgr orchestrator.ServerManager, log *slog.Logger, maxPerOwner int) *Ser
 func (s *Server) Handler() http.Handler { return s.mux }
 
 func (s *Server) routes() {
+	// /healthz is intentionally unauthenticated for liveness probes.
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
-	s.mux.HandleFunc("POST /v1/servers", s.handleCreate)
-	s.mux.HandleFunc("GET /v1/servers", s.handleList)
-	s.mux.HandleFunc("DELETE /v1/servers", s.handleStopAll)
-	s.mux.HandleFunc("GET /v1/servers/{id}", s.handleGet)
-	s.mux.HandleFunc("GET /v1/servers/{id}/status", s.handleStatus)
-	s.mux.HandleFunc("POST /v1/servers/{id}/restart", s.handleRestart)
-	s.mux.HandleFunc("DELETE /v1/servers/{id}", s.handleStop)
+	// All lifecycle routes live under /v1/* and require the bearer token (when
+	// configured) via the auth wrapper.
+	s.mux.HandleFunc("POST /v1/servers", s.auth(s.handleCreate))
+	s.mux.HandleFunc("GET /v1/servers", s.auth(s.handleList))
+	s.mux.HandleFunc("DELETE /v1/servers", s.auth(s.handleStopAll))
+	s.mux.HandleFunc("GET /v1/servers/{id}", s.auth(s.handleGet))
+	s.mux.HandleFunc("GET /v1/servers/{id}/status", s.auth(s.handleStatus))
+	s.mux.HandleFunc("POST /v1/servers/{id}/restart", s.auth(s.handleRestart))
+	s.mux.HandleFunc("DELETE /v1/servers/{id}", s.auth(s.handleStop))
+}
+
+// auth wraps a handler so that, when a token is configured, the request must
+// present "Authorization: Bearer <token>" (compared in constant time). When no
+// token is configured, auth is disabled and the handler is called directly.
+func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.token != "" {
+			const prefix = "Bearer "
+			h := r.Header.Get("Authorization")
+			if !strings.HasPrefix(h, prefix) ||
+				subtle.ConstantTimeCompare([]byte(h[len(prefix):]), []byte(s.token)) != 1 {
+				writeError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+		}
+		next(w, r)
+	}
 }
 
 // --- request/response payloads -------------------------------------------
@@ -76,13 +101,39 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
+	// Bound the request body so an unauthenticated (or buggy) client cannot OOM
+	// the orchestrator with a multi-GB payload.
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var req createRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 	if req.Mode != "" && !gamemode.IsValid(req.Mode) {
 		writeError(w, http.StatusBadRequest, "unknown mode (valid: "+strings.Join(gamemode.Names(), ", ")+")")
+		return
+	}
+	// Validate Valve's game_type/game_mode matrix and slot/bot ranges. (0,0) is
+	// a legitimate competitive default; a validated Mode string, when present,
+	// takes precedence over these raw numbers in the manager.
+	if req.GameType < 0 || req.GameType > 1 {
+		writeError(w, http.StatusBadRequest, "game_type out of range (0-1)")
+		return
+	}
+	if req.GameMode < 0 || req.GameMode > 3 {
+		writeError(w, http.StatusBadRequest, "game_mode out of range (0-3)")
+		return
+	}
+	// max_players: 0 is the deployed sentinel for "use the mode/control-plane
+	// default" (the bot omits it as 0); any explicit value must be 1-64.
+	if req.MaxPlayers < 0 || req.MaxPlayers > 64 {
+		writeError(w, http.StatusBadRequest, "max_players out of range (1-64)")
+		return
+	}
+	if req.BotQuota < 0 || req.BotQuota > 64 {
+		writeError(w, http.StatusBadRequest, "bot_quota out of range (0-64)")
 		return
 	}
 	if req.Public && req.GSLT == "" {
@@ -92,7 +143,15 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("public server requested without explicit GSLT", "owner", req.OwnerID)
 	}
 
-	if s.maxPer > 0 && req.OwnerID != "" {
+	if s.maxPer > 0 {
+		// An empty owner_id would bypass the per-owner cap entirely (and the
+		// manager keys the atomic cap on a non-empty owner), so reject it.
+		if req.OwnerID == "" {
+			writeError(w, http.StatusBadRequest, "owner_id is required")
+			return
+		}
+		// Advisory pre-check: the authoritative cap is enforced atomically
+		// inside the manager's Create (mapped to 409 via ErrLimitExceeded).
 		existing, err := s.mgr.List(r.Context(), req.OwnerID)
 		if err != nil {
 			s.writeManagerError(w, err)

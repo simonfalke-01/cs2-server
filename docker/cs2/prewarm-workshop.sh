@@ -15,7 +15,15 @@
 #
 # NOTE: this boots the game engine and cannot be exercised in CI; validate on a
 # real deploy. Tunables (env): CS2_PREWARM_WORKSHOP_IDS, CS2_PREWARM_PORT,
-# CS2_PREWARM_TIMEOUT, CS2_PREWARM_DISABLE=1 to skip entirely.
+# CS2_PREWARM_TIMEOUT.
+#
+# OPT-IN: prewarm is OFF by default and only runs when CS2_PREWARM_ENABLE=1.
+# It is gated because the bare `cs2.sh` boot used here cannot authenticate to
+# Steam to actually download workshop content — it only works on the base image's
+# full entry.sh boot path (steamclient/GSLT set up). Run headlessly from seed.sh
+# it just burns up to (#ids × CS2_PREWARM_TIMEOUT) seconds, caches nothing, and
+# delays the seed. Enable it only on a deploy where the entry.sh boot path is
+# wired up and you have confirmed it reaches Steam.
 
 # Curated 1v1/aim pool — keep in sync with plugins/Duel1v1/MapPool.cs workshop ids.
 : "${CS2_PREWARM_WORKSHOP_IDS:=3070253702 3084291314 3340432449 3071005299}"
@@ -28,8 +36,11 @@ prewarm_workshop() {
     local game_dir="$1"
     local ids="${2:-$CS2_PREWARM_WORKSHOP_IDS}"
 
-    if [[ "${CS2_PREWARM_DISABLE:-0}" == "1" ]]; then
-        echo "[prewarm] disabled via CS2_PREWARM_DISABLE; skipping."
+    # Opt-in only: skip unless explicitly enabled. See header — the bare cs2.sh
+    # boot used here cannot reach Steam, so this is a no-op (and a time sink)
+    # unless run on the full entry.sh boot path with CS2_PREWARM_ENABLE=1.
+    if [[ "${CS2_PREWARM_ENABLE:-0}" != "1" ]]; then
+        echo "[prewarm] disabled (set CS2_PREWARM_ENABLE=1 to enable); skipping."
         return 0
     fi
 

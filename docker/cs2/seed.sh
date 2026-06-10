@@ -3,8 +3,8 @@
 # shared-game-files mode. Runs once (the orchestrator invokes a throwaway
 # container with this as its command).
 #
-# It downloads CS2 via SteamCMD into <target>, installs Metamod +
-# CounterStrikeSharp, patches gameinfo.gi, and writes a .cs2-seeded marker.
+# It downloads CS2 via SteamCMD into <target>, installs SwiftlyS2, patches
+# gameinfo.gi, and writes a .cs2-seeded marker.
 #
 # Usage: seed.sh [target-dir]   (default: /shared/cs2)
 set -euo pipefail

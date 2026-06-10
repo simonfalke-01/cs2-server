@@ -159,7 +159,7 @@ func (s *Store) List(ctx context.Context, ownerID string) ([]*model.Instance, er
 	if err != nil {
 		return nil, fmt.Errorf("store: list: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []*model.Instance
 	for rows.Next() {

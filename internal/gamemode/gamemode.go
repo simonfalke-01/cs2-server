@@ -1,7 +1,10 @@
 // Package gamemode defines the selectable game-mode presets exposed to users
 // (Discord /create mode:, API "mode"). A preset maps a friendly name to Valve's
-// game_type/game_mode matrix, a default slot count, and an in-game cfg bundle
-// the server execs on boot.
+// game_type/game_mode matrix and a default slot count.
+//
+// Valve's dedicated-server matrix uses game_type/game_mode pairs; the zero pair
+// (game_type=0, game_mode=0) is the engine default and resolves to Casual.
+// "competitive" (the package Default) is game_type=0, game_mode=1.
 //
 // It is a leaf package (no internal imports) so the model, orchestrator, api,
 // and bot can all depend on it without import cycles.
@@ -22,9 +25,6 @@ type Preset struct {
 	// MaxPlayers is the default slot count for this mode (used when the request
 	// does not specify one).
 	MaxPlayers int
-	// Cfg is the cfg filename the game container execs for this mode (e.g.
-	// "1v1.cfg"). Empty means no mode-specific cfg.
-	Cfg string
 	// NoBots forces the server to run without bots regardless of a requested
 	// bot quota (e.g. the 1v1 arena is human-only; bots would also defeat idle
 	// reaping by keeping the server perpetually "occupied").
@@ -40,7 +40,6 @@ var registry = map[string]Preset{
 		GameType:    0,
 		GameMode:    1,
 		MaxPlayers:  10,
-		Cfg:         "competitive.cfg",
 		Description: "Standard 5v5 competitive",
 	},
 	"wingman": {
@@ -48,7 +47,6 @@ var registry = map[string]Preset{
 		GameType:    0,
 		GameMode:    2,
 		MaxPlayers:  4,
-		Cfg:         "wingman.cfg",
 		Description: "2v2 Wingman",
 	},
 	"deathmatch": {
@@ -56,7 +54,6 @@ var registry = map[string]Preset{
 		GameType:    1,
 		GameMode:    2,
 		MaxPlayers:  16,
-		Cfg:         "deathmatch.cfg",
 		Description: "Free-for-all deathmatch",
 	},
 	"1v1": {
@@ -64,7 +61,6 @@ var registry = map[string]Preset{
 		GameType:    0,
 		GameMode:    1,
 		MaxPlayers:  8, // 2 active duelers + up to 6 spectators
-		Cfg:         "1v1.cfg",
 		NoBots:      true,
 		Description: "Two-player 1v1 duel",
 	},

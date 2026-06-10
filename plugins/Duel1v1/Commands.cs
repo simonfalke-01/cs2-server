@@ -126,6 +126,11 @@ public partial class Duel1v1
         if (ctx.Args.Length < 1) { Tell(p, $"Usage: !map <name>.  Pool: {MapPool.Listing()}"); return; }
 
         var name = ctx.Args[0];
+        if (!MapPool.IsSafeName(name))
+        {
+            Tell(p, "Invalid map name. Use a pool name (\x04!maps\x01), a plain map name (letters/digits/underscore), or a numeric workshop id.");
+            return;
+        }
         Broadcast($"{p.Name} is changing the map to \x04{name}\x01…");
         BeginMapChange(name);
     }
@@ -155,6 +160,11 @@ public partial class Duel1v1
         if (!IsPlayer(p.SteamID)) { Tell(p, "Only active players can vote maps."); return; }
 
         var name = ctx.Args[0].ToLowerInvariant();
+        if (!MapPool.IsSafeName(name))
+        {
+            Tell(p, "Invalid map name. Use a pool name (\x04!maps\x01), a plain map name (letters/digits/underscore), or a numeric workshop id.");
+            return;
+        }
 
         if (_pendingMapVote == name && _pendingMapVoter != p.SteamID)
         {

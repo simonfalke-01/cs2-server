@@ -17,15 +17,20 @@ import (
 
 // Client talks to the orchestrator API.
 type Client struct {
-	base string
-	http *http.Client
+	base  string
+	token string
+	http  *http.Client
 }
 
-// New returns a client for the orchestrator at baseURL.
-func New(baseURL string) *Client {
+// New returns a client for the orchestrator at baseURL. When token is non-empty
+// it is sent as an "Authorization: Bearer <token>" header on every request; an
+// empty token sends no auth header (the orchestrator allows unauthenticated
+// access only when it too has no token configured).
+func New(baseURL, token string) *Client {
 	return &Client{
-		base: baseURL,
-		http: &http.Client{Timeout: 30 * time.Second},
+		base:  baseURL,
+		token: token,
+		http:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -138,12 +143,15 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		var er struct {

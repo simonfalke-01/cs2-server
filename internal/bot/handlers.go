@@ -93,8 +93,8 @@ func (b *Bot) handleList(ctx context.Context, s *discordgo.Session, i *discordgo
 	var sb strings.Builder
 	sb.WriteString(header + "\n")
 	for _, in := range list {
-		sb.WriteString(fmt.Sprintf("- `%s` — %s — `%s` (%s) — `connect %s` — %s\n",
-			in.ID, orDash(in.Name), in.Map, orDash(in.Mode), in.Connect, in.Status))
+		fmt.Fprintf(&sb, "- `%s` — %s — `%s` (%s) — `connect %s` — %s\n",
+			in.ID, orDash(in.Name), in.Map, orDash(in.Mode), in.Connect, in.Status)
 	}
 	b.followup(s, i, sb.String())
 }
@@ -329,7 +329,7 @@ func isAdmin(i *discordgo.InteractionCreate) bool {
 	if i.Member == nil {
 		return false
 	}
-	const adminMask = discordgo.PermissionAdministrator | discordgo.PermissionManageServer
+	const adminMask = discordgo.PermissionAdministrator | discordgo.PermissionManageGuild
 	return i.Member.Permissions&adminMask != 0
 }
 
